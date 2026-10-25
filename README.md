@@ -24,7 +24,7 @@ Twilight Harness 是一个 **Windows 10/11 x64** 桌面应用。它通过兼容 
 | 版本 | 主要定位 | 体积 |
 | --- | --- | --- |
 | **标准版** `twilight-harness.exe` | 纯聊天 + 双栏思考 + Markdown / 表格 | **27.05 MB** |
-| **附件版** `twilight-harness-file.exe` | 标准版全部功能 + 附件 / OCR / 识图 / 视频 / 本地工具 / 旧 Office 兼容 | **91.45 MB** |
+| **附件版** `twilight-harness-file.exe` | 标准版全部功能 + 附件 / OCR / 识图 / 视频 / 本地工具 / 旧 Office 兼容 | **91.46 MB** |
 
 > 标准版不显示附件入口；附件版是功能超集，两者共享同一套 UI、API 配置和运行时清理机制。
 
@@ -268,7 +268,7 @@ Derpibooru 搜索允许 **safe / suggestive / semi-grimdark** 三个评级，对
 
 该目录只在下载时写入，应用关闭清理不会触碰 Downloads。
 
-如果 `Downloads\TwilightHarness` 因 ACL、杀毒软件或 Windows 受控文件夹访问而不可写，程序会依次尝试 `Downloads\TwilightHarness-2`、Downloads 根目录、`Pictures\TwilightHarness` 和 `%LOCALAPPDATA%\TwilightHarness\downloads`，并在结果中显示实际路径，不会删除任何目录。
+如果 `Downloads\TwilightHarness` 因 ACL、杀毒软件或 Windows 受控文件夹访问而不可写，程序会依次尝试 `Downloads\TwilightHarness-2`、Downloads 根目录、`Pictures\TwilightHarness`、`%LOCALAPPDATA%\TwilightHarness\downloads`、EXE 目录下的 `downloads` 和系统 TEMP，并在结果中显示实际路径，不会删除任何目录。
 
 ### 本地 Derpibooru tag 表
 

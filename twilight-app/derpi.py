@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 import urllib.parse
 import urllib.request
@@ -149,6 +150,8 @@ def save_dir() -> Path:
         primary,
         Path.home() / "Pictures" / "TwilightHarness",
         paths.persistent_dir() / "downloads",
+        paths.resource_base() / "downloads",
+        Path(tempfile.gettempdir()) / "TwilightHarness",
     ]
     for folder in candidates:
         try:
@@ -157,8 +160,8 @@ def save_dir() -> Path:
         except OSError:
             continue
     raise DerpiError(
-        "no writable download folder found (Downloads/TwilightHarness, "
-        "Pictures/TwilightHarness and LocalAppData were all denied)"
+        "no writable download folder found; tried Downloads/TwilightHarness, "
+        "Pictures/TwilightHarness, LocalAppData, the application folder and TEMP"
     )
 
 
