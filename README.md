@@ -23,8 +23,8 @@ Twilight Harness 是一个 **Windows 10/11 x64** 桌面应用。它通过兼容 
 
 | 版本 | 主要定位 | 体积 |
 | --- | --- | --- |
-| **标准版** `twilight-harness.exe` | 纯聊天 + 双栏思考 + Markdown / 表格 | **26.76 MB** |
-| **附件版** `twilight-harness-file.exe` | 标准版全部功能 + 附件 / OCR / 识图 / 视频 / 本地工具 / 旧 Office 兼容 | **91.16 MB** |
+| **标准版** `twilight-harness.exe` | 纯聊天 + 双栏思考 + Markdown / 表格 | **27.04 MB** |
+| **附件版** `twilight-harness-file.exe` | 标准版全部功能 + 附件 / OCR / 识图 / 视频 / 本地工具 / 旧 Office 兼容 | **91.44 MB** |
 
 > 标准版不显示附件入口；附件版是功能超集，两者共享同一套 UI、API 配置和运行时清理机制。
 
@@ -61,6 +61,7 @@ Twilight Harness 是一个 **Windows 10/11 x64** 桌面应用。它通过兼容 
 | ffmpeg 音频分离 / 转码 | — | ✅ |
 | Real-ESRGAN 超分辨率 | — | ✅ |
 | Derpibooru 图片下载 | ✅ | ✅ |
+| 本地 20,000 Derpibooru tag 表 | ✅ | ✅ |
 | `.doc/.ppt/.xls` 临时转换 | — | ✅ |
 | 关闭清理 `fonts/`、`temp/`、`data/`、`log/` | ✅ | ✅ |
 
@@ -230,6 +231,33 @@ Derpibooru 搜索允许 **safe / suggestive / semi-grimdark** 三个评级，对
 ```
 
 该目录只在下载时写入，应用关闭清理不会触碰 Downloads。
+
+### 本地 Derpibooru tag 表
+
+两个版本都内嵌一份本地 tag 表：
+
+```text
+assets/derpibooru-tags.json.gz
+```
+
+数据特征：
+
+- 按 Derpibooru 作品数量（`images`）从高到低排列；
+- 固定收录 **20,000** 个标签；
+- 包含 `artist:`、`oc:`、`fanfic:` 等命名空间标签；
+- 每个标签包含 `name`、`images`、`category`、`namespace` 与 `aliases`；
+- 排除 rating 元数据标签，并用敏感词黑名单过滤色情、极端暴力、仇恨侮辱等标签及别名；
+- 压缩 JSON，便于随 EXE 内嵌和本地快速加载。
+
+应用会用它解析多词 tag 和别名，例如把用户写法规范到实际 tag 名称，减少无效搜索。生成脚本：
+
+```text
+tools/fetch_derpibooru_tags.py
+```
+
+当前快照包含：`artist:` 标签 4,058 个、`oc:` 标签 1,132 个、`fanfic:` 标签 17 个，共收录约 11,978 条 aliases。
+
+数据是生成时的快照，不会自动联网更新；需要更新时重新运行脚本并重建 EXE。
 
 ### 附件限制
 
@@ -406,6 +434,7 @@ twilight-app/              Python + Tkinter 源码
   widgets.py               自绘控件、窗口按钮、Markdown 渲染
   markdown_tables.py       Markdown / HTML 表格渲染
   derpi.py                 Derpibooru 搜索、评级过滤与 derpicdn 下载
+  tag_table.py             本地 20k tag 表加载、别名与多词 tag 解析
   local_actions.py         Real-ESRGAN / 音视频本地工具（附件版）
   local_tools.py           模型发起的本地工具调用协议
   api_client.py            OpenAI 兼容客户端、SSE、配置
@@ -417,9 +446,10 @@ twilight-app/              Python + Tkinter 源码
   build_app.py             标准版构建脚本
   build_file.py            附件版构建脚本
 
-assets/                    字体、头像、开场图等资源
+assets/                    字体、头像、开场图、Derpibooru tag 表
 content/                   角色卡
 tools/realesrgan/          内嵌 Real-ESRGAN 运行库与动漫模型
+ tools/fetch_derpibooru_tags.py  tag 表生成脚本
 docs/images/               README 截图
 docs/design/               原始界面与头像设计参考
 build/                     图标、图标生成脚本与版本信息
@@ -444,6 +474,7 @@ twilight-harness-file/     本地构建的附件版产物
 - 思考端、输出端 Markdown / 表格渲染；
 - 视频 12–72 帧抽帧、联系表、帧 OCR 和多模态请求；
 - Derpibooru 搜索（safe / suggestive / semi-grimdark）、逗号 tag 叠加与 derpicdn.net 下载；
+- 本地 20k tag 表与别名解析（artist: 4,058 / oc: 1,132 / fanfic: 17）；
 - 截图中 `sunny starcout` 类拼写会规范为 `sunny starscout`；
 - 模型 API 工具调用本地 Derpibooru / Real-ESRGAN / 音频分离 / 视频转码；
 - Real-ESRGAN 超分、ffmpeg 音频分离与转码；
@@ -465,6 +496,7 @@ twilight-harness-file/     本地构建的附件版产物
 - 图片 OCR 依赖 Windows OCR 语言包；
 - 扫描版 PDF 不会自动 OCR；
 - 视频解码、音频分离和转码使用随附件版打包的 ffmpeg；
+- 本地 tag 表是生成时快照，可能与最新 Derpibooru 数据存在差异。
 - AI 识图/视频理解需要视觉模型；文本模型会回退到 OCR 文本；
 - 视频按 12–72 帧生成联系表并识别部分画面文字，不做完整时间轴理解或音频转写；
 - 没有自动更新器，也没有内置代理设置。

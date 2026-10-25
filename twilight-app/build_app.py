@@ -23,6 +23,7 @@ BUILD = ROOT / "build"
 DIST = BUILD / "dist"
 DELIVERY = ROOT / "twilight-harness"
 FONTS_SRC = ROOT / "assets" / "fonts"
+TAG_TABLE = ROOT / "assets" / "derpibooru-tags.json.gz"
 FONT_FILES = (
     "UniNeue-Regular.ttf",
     "UniNeue-Bold.ttf",
@@ -139,8 +140,12 @@ def main() -> int:
         APP / "markdown_tables.py",
         APP / "derpi.py",
         APP / "local_tools.py",
+        APP / "tag_table.py",
         APP / "feature_flags.py",
     ]
+    if not TAG_TABLE.is_file():
+        print(f"ERROR: missing Derpibooru tag table {TAG_TABLE}", file=sys.stderr)
+        return 2
     for module in modules:
         if not module.is_file():
             print(f"ERROR: missing source module {module}", file=sys.stderr)
@@ -195,6 +200,8 @@ def main() -> int:
         ".",
         "--add-data",
         f"{FONTS_SRC};fonts",
+        "--add-data",
+        f"{TAG_TABLE};assets",
         "--name",
         "twilight-harness",
         "--icon",

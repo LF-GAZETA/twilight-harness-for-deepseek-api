@@ -14,6 +14,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+import tag_table
+
 ALLOWED_RATINGS = ("safe", "suggestive", "semi-grimdark")
 _RATING_TAGS = {"safe", "suggestive", "semi-grimdark", "questionable", "explicit"}
 
@@ -164,10 +166,13 @@ def extract_tags(text: str) -> list[str]:
     # If explicit comma-separated tags are supplied, preserve those boundaries
     # and all punctuation inside each tag.
     tags: list[str] = []
+    table = tag_table.load()
     if "," in raw or "，" in raw:
         for piece in re.split(r"[,，]", raw):
             cleaned = _clean_tag(piece)
             if cleaned:
+                if table is not None:
+                    cleaned = table.canonicalize(cleaned)
                 tags.append(cleaned)
     else:
         for filler in sorted(_FILLER, key=len, reverse=True):
@@ -181,6 +186,17 @@ def extract_tags(text: str) -> list[str]:
                     flags=re.IGNORECASE,
                 )
         raw = re.sub(r"\s+", " ", raw).strip(" ,，。.;；")
+        table_tags: list[str] = []
+        if table is not None:
+            matches = table.find_phrases(raw)
+            if matches:
+                words = raw.split()
+                for start, end, canonical in matches:
+                    words[start] = f" __TAGTABLE_{len(table_tags)}__ "
+                    for index in range(start + 1, end):
+                        words[index] = ""
+                    table_tags.append(canonical)
+                raw = " ".join(word for word in words if word)
         placeholders: list[str] = []
         for known in sorted(_KNOWN_TAGS, key=len, reverse=True):
             pattern = re.compile(re.escape(known), re.IGNORECASE)
@@ -188,6 +204,13 @@ def extract_tags(text: str) -> list[str]:
                 raw = pattern.sub(f" __KNOWN_{len(placeholders)}__ ", raw, count=1)
                 placeholders.append(known)
         for token in raw.split():
+            if token.startswith("__TAGTABLE_"):
+                try:
+                    idx = int(token.strip("_").split("_")[-1])
+                    tags.append(table_tags[idx])
+                except (ValueError, IndexError):
+                    continue
+                continue
             if token.startswith("__KNOWN_"):
                 try:
                     idx = int(token.strip("_").split("_")[-1])
