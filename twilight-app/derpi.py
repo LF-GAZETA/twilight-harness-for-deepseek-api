@@ -400,12 +400,12 @@ def _find_images_paged(
 
 def find_images(
     query,
-    limit: int = 4,
+    limit: int = 10,
     after: str | None = None,
     before: str | None = None,
 ) -> list[dict]:
     """Return selected image records (with IDs) before downloading."""
-    limit = max(1, min(MAX_IMAGE_DOWNLOADS, int(limit or 4)))
+    limit = max(1, min(MAX_IMAGE_DOWNLOADS, int(limit or 10)))
     raw_tags = query if isinstance(query, (list, tuple)) else extract_tags(str(query))
     tags: list[str] = []
     for tag in raw_tags:
@@ -455,7 +455,7 @@ def _download_images(images: list[dict], limit: int) -> list[Path]:
     return saved
 
 def download_selected(images: list[dict], limit: int) -> list[Path]:
-    saved = _download_images(images, max(1, min(MAX_IMAGE_DOWNLOADS, int(limit or 4))))
+    saved = _download_images(images, max(1, min(MAX_IMAGE_DOWNLOADS, int(limit or 10))))
     if not saved:
         detail = "; ".join(_LAST_DOWNLOAD_ERRORS[-4:])
         raise DerpiError(
@@ -467,13 +467,13 @@ def download_selected(images: list[dict], limit: int) -> list[Path]:
 
 def search_download(
     query,
-    limit: int = 4,
+    limit: int = 10,
     after: str | None = None,
     before: str | None = None,
 ) -> list[Path]:
     """Backward-compatible convenience wrapper: select and download."""
     images = find_images(query, limit=limit, after=after, before=before)
-    saved = download_selected(images, max(1, min(MAX_IMAGE_DOWNLOADS, int(limit or 4))))
+    saved = download_selected(images, max(1, min(MAX_IMAGE_DOWNLOADS, int(limit or 10))))
     if not saved:
         raise DerpiError("no downloadable derpicdn.net images were returned for the selected image IDs")
     return saved

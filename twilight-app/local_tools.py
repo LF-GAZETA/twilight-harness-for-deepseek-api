@@ -32,7 +32,8 @@ def system_prompt(allow_file_tools: bool) -> str:
         "你可以在回复末尾请求本地工具执行。格式必须是独立的一行或多行：",
         '[[LOCAL_TOOL: {"tool":"derpi","query":"..."}]]',
         "可用工具：",
-        '- derpi：按用户需求搜索 Derpibooru（safe / suggestive / semi-grimdark），并从 derpicdn.net 下载到用户的 Downloads 文件夹。参数：query（必填）、limit（可选，1-5000）。',
+        '- derpi：按用户需求搜索 Derpibooru（safe / suggestive / semi-grimdark），并从 derpicdn.net 下载到用户的 Downloads 文件夹。参数：query（必填）、limit（可选，1-5000；用户未指定数量时使用 10）。',
+        '  用户没有明确说明数量时不要填写 limit，应用默认抓取 10 张。',
         '  query 必须使用逗号分隔的 Derpibooru 标签，标签内部的括号、英文句点、感叹号和问号必须原样保留；不要在 query 中加入 safe/suggestive/semi-grimdark 等评级词。示例："twilight sparkle (alicorn), alicorn"。',
         f'  当前日期是 {today}。用户如果给出时间段，请转换为 after/before 的 YYYY-MM-DD 日期；如果用户没有说时间段，则不要填写 after/before，应用会自动选择最新图片。',
         '  时间范围内结果超过 limit 时应用会自动随机挑选 limit 张；不需要你处理随机逻辑。',
@@ -123,9 +124,9 @@ def execute_calls(
             try:
                 query = str(call.get("query") or "").strip()
                 try:
-                    limit = int(call.get("limit") or 4)
+                    limit = int(call.get("limit") or 10)
                 except (TypeError, ValueError):
-                    limit = 4
+                    limit = 10
                 after = str(call.get("after") or "").strip()
                 before = str(call.get("before") or "").strip()
                 selected = derpi.find_images(

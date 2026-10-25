@@ -228,10 +228,10 @@ Derpibooru 搜索允许 **safe / suggestive / semi-grimdark** 三个评级，对
 对于 Derpibooru，自然语言不会直接请求 API，而是先让模型翻译为例如：
 
 ```text
-[[LOCAL_TOOL: {"tool":"derpi","query":"twilight sparkle (alicorn), transparent background","limit":4,"after":"2024-01-01","before":"2025-01-01"}]]
+[[LOCAL_TOOL: {"tool":"derpi","query":"twilight sparkle (alicorn), transparent background","limit":10,"after":"2024-01-01","before":"2025-01-01"}]]
 ```
 
-然后本地工具再访问 Derpibooru；`limit` 最大为 **5000**。没有时间段时选择最新图片；时间段内结果多于 `limit` 时随机挑选 `limit` 张；结果不足时取全部。大量图片会分页搜索并并发下载，可能需要较长时间。
+然后本地工具再访问 Derpibooru；用户未指定数量时默认抓取 **10 张**；`limit` 最大为 **5000**。没有时间段时选择最新图片；时间段内结果多于 `limit` 时随机挑选 `limit` 张；结果不足时取全部。大量图片会分页搜索并并发下载，可能需要较长时间。
 
 搜索完成后会先在聊天区显示本次选中的 Derpibooru 图片编号（数量很大时只显示前 24 个和总数），再开始从 `derpicdn.net` 下载。下载会优先使用完整图片，失败时回退到 CDN 的 large/medium/small 表示，并使用 curl 作为 TLS/反爬回退；如果全部失败，编号仍会保留，错误信息会附带图片 ID 与具体原因。结果很多时聊天区只展示前 40 个文件路径和所在目录。
 

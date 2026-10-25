@@ -1432,10 +1432,10 @@ class TwilightApp:
 
         def work() -> None:
             try:
-                images = derpi.find_images(query, 4)
+                images = derpi.find_images(query, 10)
                 ids = [str(item.get("id")) for item in images if item.get("id")]
                 self._queue.put(("tool_progress", "derpi", ids))
-                paths = derpi.download_selected(images, 4)
+                paths = derpi.download_selected(images, 10)
                 if not paths:
                     raise derpi.DerpiError(
                         "no downloadable derpicdn.net images were returned for the selected image IDs"
