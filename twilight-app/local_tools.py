@@ -32,7 +32,7 @@ def system_prompt(allow_file_tools: bool) -> str:
         "你可以在回复末尾请求本地工具执行。格式必须是独立的一行或多行：",
         '[[LOCAL_TOOL: {"tool":"derpi","query":"..."}]]',
         "可用工具：",
-        '- derpi：按用户需求搜索 Derpibooru（safe / suggestive / semi-grimdark），并从 derpicdn.net 下载到用户的 Downloads 文件夹。参数：query（必填）、limit（可选，1-8）。',
+        '- derpi：按用户需求搜索 Derpibooru（safe / suggestive / semi-grimdark），并从 derpicdn.net 下载到用户的 Downloads 文件夹。参数：query（必填）、limit（可选，1-5000）。',
         '  query 必须使用逗号分隔的 Derpibooru 标签，标签内部的括号、英文句点、感叹号和问号必须原样保留；不要在 query 中加入 safe/suggestive/semi-grimdark 等评级词。示例："twilight sparkle (alicorn), alicorn"。',
         f'  当前日期是 {today}。用户如果给出时间段，请转换为 after/before 的 YYYY-MM-DD 日期；如果用户没有说时间段，则不要填写 after/before，应用会自动选择最新图片。',
         '  时间范围内结果超过 limit 时应用会自动随机挑选 limit 张；不需要你处理随机逻辑。',
@@ -130,7 +130,7 @@ def execute_calls(
                 before = str(call.get("before") or "").strip()
                 selected = derpi.find_images(
                     query,
-                    max(1, min(8, limit)),
+                    max(1, min(derpi.MAX_IMAGE_DOWNLOADS, limit)),
                     after=after,
                     before=before,
                 )
@@ -140,7 +140,7 @@ def execute_calls(
                         on_progress("derpi", ids)
                     except Exception:  # noqa: BLE001
                         pass
-                paths = derpi.download_selected(selected, max(1, min(8, limit)))
+                paths = derpi.download_selected(selected, max(1, min(derpi.MAX_IMAGE_DOWNLOADS, limit)))
                 if not paths:
                     raise derpi.DerpiError(
                         "no downloadable derpicdn.net images were returned for the selected image IDs"

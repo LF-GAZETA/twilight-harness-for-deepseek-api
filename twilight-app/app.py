@@ -1488,7 +1488,7 @@ class TwilightApp:
             "audio": "local_audio_done",
             "transcode": "local_transcode_done",
         }.get(kind, "local_derpi_done")
-        message = s[key] + "\n" + "\n".join(paths)
+        message = s[key] + "\n" + self._format_result_paths(paths)
         self._append_right_text("\n" + message + "\n", "sys_notice")
         self._sending = False
         self._set_chat_status("ready")
@@ -1748,11 +1748,24 @@ class TwilightApp:
         self._set_chat_status("ready")
         self._focus_composer()
 
+    def _format_result_paths(self, paths: list[str]) -> str:
+        if len(paths) <= 60:
+            return "\n".join(paths)
+        shown = "\n".join(paths[:40])
+        try:
+            folder = str(Path(paths[0]).parent)
+        except Exception:  # noqa: BLE001
+            folder = ""
+        return shown + f"\n… (+{len(paths) - 40} files)" + (f"\n{folder}" if folder else "")
+
     def _handle_tool_progress(self, tool: str, ids: list[str]) -> None:
         if self._closed or tool != "derpi" or not ids:
             return
+        shown = ", ".join(ids[:24])
+        if len(ids) > 24:
+            shown += f" … (+{len(ids) - 24})"
         self._append_right_text(
-            "\n" + self._s["local_ids_found"] + "\n" + ", ".join(ids) + "\n",
+            "\n" + self._s["local_ids_found"] + "\n" + shown + "\n",
             "sys_notice",
         )
 
@@ -1774,7 +1787,7 @@ class TwilightApp:
                 )
                 continue
             key = key_by_tool.get(outcome.tool, "local_derpi_done")
-            message = s[key] + "\n" + "\n".join(outcome.paths)
+            message = s[key] + "\n" + self._format_result_paths(outcome.paths)
             self._append_right_text("\n" + message + "\n", "sys_notice")
         self._sending = False
         self._set_chat_status("ready")

@@ -23,8 +23,8 @@ Twilight Harness 是一个 **Windows 10/11 x64** 桌面应用。它通过兼容 
 
 | 版本 | 主要定位 | 体积 |
 | --- | --- | --- |
-| **标准版** `twilight-harness.exe` | 纯聊天 + 双栏思考 + Markdown / 表格 | **27.05 MB** |
-| **附件版** `twilight-harness-file.exe` | 标准版全部功能 + 附件 / OCR / 识图 / 视频 / 本地工具 / 旧 Office 兼容 | **91.46 MB** |
+| **标准版** `twilight-harness.exe` | 纯聊天 + 双栏思考 + Markdown / 表格 | **27.28 MB** |
+| **附件版** `twilight-harness-file.exe` | 标准版全部功能 + 附件 / OCR / 识图 / 视频 / 本地工具 / 旧 Office 兼容 | **91.45 MB** |
 
 > 标准版不显示附件入口；附件版是功能超集，两者共享同一套 UI、API 配置和运行时清理机制。
 
@@ -231,9 +231,9 @@ Derpibooru 搜索允许 **safe / suggestive / semi-grimdark** 三个评级，对
 [[LOCAL_TOOL: {"tool":"derpi","query":"twilight sparkle (alicorn), transparent background","limit":4,"after":"2024-01-01","before":"2025-01-01"}]]
 ```
 
-然后本地工具再访问 Derpibooru；如果用户没有给出时间段，则选择最新图片；如果时间段内结果多于 `limit`，则随机挑选 `limit` 张。
+然后本地工具再访问 Derpibooru；`limit` 最大为 **5000**。没有时间段时选择最新图片；时间段内结果多于 `limit` 时随机挑选 `limit` 张；结果不足时取全部。大量图片会分页搜索并并发下载，可能需要较长时间。
 
-搜索完成后会先在聊天区显示本次选中的 Derpibooru 图片编号，再开始从 `derpicdn.net` 下载。下载会优先使用完整图片，失败时回退到 CDN 的 large/medium/small 表示，并使用 curl 作为 TLS/反爬回退；如果全部失败，编号仍会保留，错误信息会附带图片 ID 与具体原因。
+搜索完成后会先在聊天区显示本次选中的 Derpibooru 图片编号（数量很大时只显示前 24 个和总数），再开始从 `derpicdn.net` 下载。下载会优先使用完整图片，失败时回退到 CDN 的 large/medium/small 表示，并使用 curl 作为 TLS/反爬回退；如果全部失败，编号仍会保留，错误信息会附带图片 ID 与具体原因。结果很多时聊天区只展示前 40 个文件路径和所在目录。
 
 如果 Downloads 目录本身不可写（例如被 Windows 受控文件夹访问拦截），会明确提示目录不可写，而不是笼统地报“没有可下载图片”。
 
