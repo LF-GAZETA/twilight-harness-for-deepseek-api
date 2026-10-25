@@ -569,7 +569,7 @@ class TwilightApp:
             for char, char_width in zip(title, widths):
                 if char != " ":
                     self._brand_canvas.create_text(
-                        x, baseline, text=char, anchor="sw", fill=theme.BLACK, font=font
+                        x, baseline, text=char, anchor="sw", fill=theme.SETUP_TITLE_TEXT, font=font
                     )
                 x += char_width + tracking
             self._brand_canvas.place_configure(x=22, rely=1.0, y=-24, anchor="sw")
@@ -766,12 +766,27 @@ class TwilightApp:
             api_client.LOGGER.warning("Could not save API key: %s", exc)
         self._enter_chat(reply)
 
+    def _setup_error_text(self, status: int | None, message: str) -> str:
+        s = self._s
+        lower = (message or "").lower()
+        if status in (401, 403) or any(
+            token in lower
+            for token in ("401", "invalid api", "invalid_api_key", "unauthorized", "无效", "invalid key")
+        ):
+            return s["api_error_invalid"]
+        if status is None or any(
+            token in lower
+            for token in ("connect", "connection", "timed out", "timeout", "winerror", "网络", "无法连接")
+        ):
+            return s["api_error_connection"]
+        return f"{s['error_prefix']} (HTTP {status})"
+
     def _handle_prep_error(self, status: int | None, message: str) -> None:
         if self._closed or self._mode != "setup" or not self._preparing:
             return
         self._stop_setup_animation()
         self._set_setup_busy(False)
-        self._set_form_message(self._s["error_prefix"], color=theme.ERROR)
+        self._set_form_message(self._setup_error_text(status, message), color=theme.ERROR)
         if self._key_entry is not None:
             self._key_entry.set_error(True)
             self._key_entry.focus_entry()
@@ -942,6 +957,10 @@ class TwilightApp:
         for widget in (self._think_text, self._right_text):
             if widget is None:
                 continue
+            is_think = widget is self._think_text
+            text_color = theme.THINKING_TEXT if is_think else theme.BLACK
+            muted_color = theme.THINKING_TEXT if is_think else theme.MUTED
+            highlight_color = theme.THINKING_TEXT if is_think else theme.ACCENT
             widget.tag_configure("block_gap", font=theme.font(4, family=theme.body_family(self._content_locale)))
             widget.tag_configure(
                 "body",
@@ -972,7 +991,7 @@ class TwilightApp:
             widget.tag_configure(
                 "think_body",
                 font=body,
-                foreground=theme.BLACK,
+                foreground=theme.THINKING_TEXT,
                 spacing1=1,
                 spacing3=2,
                 lmargin1=3,
@@ -981,7 +1000,7 @@ class TwilightApp:
             widget.tag_configure(
                 "muted",
                 font=small,
-                foreground=theme.MUTED,
+                foreground=muted_color,
                 spacing1=2,
                 spacing3=2,
                 lmargin1=3,
@@ -1003,19 +1022,19 @@ class TwilightApp:
                 spacing1=8,
                 spacing3=6,
             )
-            widget.tag_configure("md_bold", font=body_bold, foreground=theme.BLACK)
-            widget.tag_configure("md_italic", font=body_italic, foreground=theme.BLACK)
+            widget.tag_configure("md_bold", font=body_bold, foreground=text_color)
+            widget.tag_configure("md_italic", font=body_italic, foreground=text_color)
             widget.tag_configure(
                 "md_code",
                 font=mono,
                 background=theme.BUTTON,
-                foreground=theme.BLACK,
+                foreground=text_color,
             )
             widget.tag_configure(
                 "md_codeblock",
                 font=mono,
                 background=theme.BUTTON,
-                foreground=theme.BLACK,
+                foreground=text_color,
                 lmargin1=12,
                 lmargin2=12,
                 rmargin=6,
@@ -1025,21 +1044,21 @@ class TwilightApp:
             widget.tag_configure(
                 "md_heading",
                 font=body_bold,
-                foreground=theme.ACCENT,
+                foreground=highlight_color,
                 spacing1=7,
                 spacing3=3,
             )
             widget.tag_configure(
                 "md_bullet",
                 font=body,
-                foreground=theme.ACCENT,
+                foreground=highlight_color,
                 lmargin1=2,
                 lmargin2=15,
             )
             widget.tag_configure(
                 "md_quote",
                 font=body_italic,
-                foreground=theme.MUTED,
+                foreground=muted_color,
                 lmargin1=10,
                 lmargin2=10,
                 spacing1=2,
@@ -1048,7 +1067,7 @@ class TwilightApp:
             widget.tag_configure(
                 "md_table",
                 font=table_font,
-                foreground=theme.BLACK,
+                foreground=text_color,
                 background=theme.WHITE,
             )
 

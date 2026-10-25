@@ -101,6 +101,16 @@ Twilight Harness 是一个 **Windows 10/11 x64** 桌面应用。它通过兼容 
 
 流式生成期间可能短暂显示原始标记，生成完成后统一变为格式化文本。
 
+### 设置页错误提示
+
+设置页会区分具体失败场景：
+
+- 网络无法连接：`API错误（无法连接到API）`
+- 401/403 或无效 Key：`API错误（无效API）`
+- 其他 HTTP 状态：显示对应 HTTP 状态
+
+思考端正文和设置页 “Twilight Harness” 标题使用 `#361759` 字体颜色。
+
 ### 12 种语言
 
 简体中文、繁體中文、English、日本語、한국어、Français、Deutsch、Español、Português、Italiano、Русский、العربية。

@@ -34,6 +34,8 @@ ONLINE = "#43B02A"
 FIELD_BORDER = "#000000"
 PANEL_HOVER = "#EAD7FF"
 MUTED = "#706A77"
+THINKING_TEXT = "#361759"
+SETUP_TITLE_TEXT = "#361759"
 
 # ---------------------------------------------------------------------------
 # Font resolution
