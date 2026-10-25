@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -26,12 +27,15 @@ class ToolOutcome:
 
 
 def system_prompt(allow_file_tools: bool) -> str:
+    today = datetime.now().astimezone().strftime("%Y-%m-%d")
     lines = [
         "你可以在回复末尾请求本地工具执行。格式必须是独立的一行或多行：",
         '[[LOCAL_TOOL: {"tool":"derpi","query":"..."}]]',
         "可用工具：",
         '- derpi：按用户需求搜索 Derpibooru（safe / suggestive / semi-grimdark），并从 derpicdn.net 下载到用户的 Downloads 文件夹。参数：query（必填）、limit（可选，1-8）。',
         '  query 必须使用逗号分隔的 Derpibooru 标签，标签内部的括号、英文句点、感叹号和问号必须原样保留；不要在 query 中加入 safe/suggestive/semi-grimdark 等评级词。示例："twilight sparkle (alicorn), alicorn"。',
+        f'  当前日期是 {today}。用户如果给出时间段，请转换为 after/before 的 YYYY-MM-DD 日期；如果用户没有说时间段，则不要填写 after/before，应用会自动选择最新图片。',
+        '  时间范围内结果超过 limit 时应用会自动随机挑选 limit 张；不需要你处理随机逻辑。',
     ]
     if allow_file_tools:
         lines += [
@@ -120,7 +124,14 @@ def execute_calls(
                     limit = int(call.get("limit") or 4)
                 except (TypeError, ValueError):
                     limit = 4
-                paths = derpi.search_download(query, max(1, min(8, limit)))
+                after = str(call.get("after") or "").strip()
+                before = str(call.get("before") or "").strip()
+                paths = derpi.search_download(
+                    query,
+                    max(1, min(8, limit)),
+                    after=after,
+                    before=before,
+                )
                 outcomes.append(ToolOutcome(tool="derpi", paths=[str(p) for p in paths]))
             except Exception as exc:  # noqa: BLE001
                 outcomes.append(ToolOutcome(tool="derpi", error=str(exc)))

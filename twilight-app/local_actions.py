@@ -328,10 +328,7 @@ def parse_request(text: str, items: list[attachments.Attachment]) -> LocalReques
             params=parse_transcode_params(raw),
         )
 
-    # Natural-language convenience triggers.
-    if any(word in lower for word in ("derpibooru", "derpi", "呆站")):
-        if any(word in lower for word in ("找", "搜", "下载", "抓取", "来", "给我", "find", "search", "download")):
-            return LocalRequest(kind="derpi", title="Derpibooru", query=derpi.extract_query(raw))
+    # Natural-language convenience triggers (Derpibooru is model-translated).
     if any(word in lower for word in ("超分", "超分辨率", "放大", "upscale", "esrgan")):
         image = _first_image(items)
         if image is not None:

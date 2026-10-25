@@ -234,20 +234,9 @@ def extract_query(text: str) -> str:
 
 
 def is_request(text: str) -> bool:
+    """Only an explicit /derpi command bypasses model translation."""
     raw = (text or "").strip()
-    if re.match(r"^/?(?:derpi|derpibooru)\b", raw, flags=re.IGNORECASE):
-        return True
-    lower = raw.lower()
-    if any(trigger in lower for trigger in ("derpibooru", "derpi", "呆站")):
-        return any(
-            verb in lower
-            for verb in (
-                "找", "搜", "下载", "抓取", "来", "给我", "下点", "收集",
-                "find", "search", "download",
-            )
-        )
-    return False
-
+    return bool(re.match(r"^/?(?:derpi|derpibooru)\b", raw, flags=re.IGNORECASE))
 
 def _is_allowed(image: dict) -> bool:
     tags = {str(tag).lower() for tag in image.get("tags") or []}
@@ -258,39 +247,32 @@ def _is_allowed(image: dict) -> bool:
     return not ({"explicit", "questionable"} & tags)
 
 
-def search_download(query, limit: int = 4) -> list[Path]:
-    raw_tags = query if isinstance(query, (list, tuple)) else extract_tags(str(query))
-    tags: list[str] = []
-    for tag in raw_tags:
-        cleaned = _clean_tag(str(tag))
-        if cleaned and cleaned not in tags:
-            tags.append(cleaned)
-    if not tags:
-        tags = ["twilight sparkle"]
-    allowed = " OR ".join(ALLOWED_RATINGS)
-    # Derpibooru ANDs comma-separated tags. Parentheses, periods, ! and ?
-    # inside a tag are preserved; the rating group is a separate comma term.
-    q = ", ".join(tags) + f", ({allowed})"
-    url = "https://derpibooru.org/api/v1/json/search/images?" + urllib.parse.urlencode(
-        {
-            "q": q,
-            "per_page": max(1, min(limit, 8)),
-            "sf": "created_at",
-            "sd": "desc",
-        }
-    )
+def _date_term(value: str) -> str:
+    value = (value or "").strip()
+    match = re.match(r"(\d{4}-\d{2}-\d{2})", value)
+    return match.group(1) if match else ""
+
+
+def _search_payload(q: str, limit: int, sort: str) -> dict:
+    params = {
+        "q": q,
+        "per_page": 50,
+        "sf": sort,
+        "sd": "desc",
+    }
+    url = "https://derpibooru.org/api/v1/json/search/images?" + urllib.parse.urlencode(params)
     request = urllib.request.Request(
         url,
         headers={"User-Agent": "TwilightHarness/1.0 (fan project; local desktop client)"},
     )
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
-            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+            return json.loads(response.read().decode("utf-8", errors="replace"))
     except Exception as exc:  # noqa: BLE001
         raise DerpiError(f"Derpibooru search failed: {exc}") from exc
-    images = payload.get("images") if isinstance(payload, dict) else None
-    if not images:
-        raise DerpiError(f"Derpibooru returned no images for tags: {q}")
+
+
+def _download_images(images: list[dict], limit: int) -> list[Path]:
     folder = save_dir()
     saved: list[Path] = []
     for image in images:
@@ -320,6 +302,55 @@ def search_download(query, limit: int = 4) -> list[Path]:
             continue
         if target.is_file() and target.stat().st_size > 0:
             saved.append(target)
+    return saved
+
+
+def search_download(
+    query,
+    limit: int = 4,
+    after: str | None = None,
+    before: str | None = None,
+) -> list[Path]:
+    """Search Derpibooru and download images.
+
+    - No time range: return the newest available images.
+    - Time range with more results than the limit: request a random ordering
+      and take the first *limit*.
+    - Time range with fewer results: take all available results.
+    """
+    limit = max(1, min(8, int(limit or 4)))
+    raw_tags = query if isinstance(query, (list, tuple)) else extract_tags(str(query))
+    tags: list[str] = []
+    for tag in raw_tags:
+        cleaned = _clean_tag(str(tag))
+        if cleaned and cleaned.lower() not in _RATING_TAGS and cleaned not in tags:
+            tags.append(cleaned)
+    if not tags:
+        tags = ["twilight sparkle"]
+    after_date = _date_term(after or "")
+    before_date = _date_term(before or "")
+    allowed = " OR ".join(ALLOWED_RATINGS)
+    terms = list(tags)
+    if after_date:
+        terms.append(f"created_at.gte:{after_date}")
+    if before_date:
+        terms.append(f"created_at.lt:{before_date}")
+    terms.append(f"({allowed})")
+    q = ", ".join(terms)
+
+    # First look up the newest results (and get the total for the date range).
+    newest = _search_payload(q, limit, "created_at")
+    total = int(newest.get("total") or 0)
+    images = newest.get("images") or []
+    if not images:
+        raise DerpiError(f"Derpibooru returned no images for tags: {q}")
+    if (after_date or before_date) and total > limit:
+        # A time range contains more images than the requested count: randomize.
+        images = _search_payload(q, limit, "random").get("images") or images
+    saved = _download_images(images, limit)
     if not saved:
-        raise DerpiError(f"no downloadable derpicdn.net images were returned for tags: {q}")
+        raise DerpiError(
+            f"no downloadable derpicdn.net images were returned for tags: {q} "
+            f"(total={total}, limit={limit})"
+        )
     return saved

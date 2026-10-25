@@ -182,7 +182,9 @@ Ctrl + Enter 发送        Alt + Enter 添加附件
 
 ### 本地工具
 
-这些操作由本地程序直接完成，不会删除用户的 Downloads 文件夹。
+显式 `/derpi`/`/upscale`/`/audio`/`/transcode` 命令会由本地执行；自然语言请求则先由配置的 API 模型翻译成标签、工具命令和时间参数，再自动触发本地工具。
+
+所有本地工具都不会删除用户的 Downloads 文件夹。
 
 - **标准版**：支持 Derpibooru 图片搜索下载；
 - **附件版**：额外支持 Real-ESRGAN 超分、视频音频分离、视频转码。
@@ -208,6 +210,14 @@ Derpibooru 搜索允许 **safe / suggestive / semi-grimdark** 三个评级，对
 - “帮我找几张紫悦的呆站图片”
 - 附加图片后说“把这张图超分一下”
 - 附加视频后说“提取音频”或“转码成 webm，分辨率 720p，视频码率 2M”
+
+对于 Derpibooru，自然语言不会直接请求 API，而是先让模型翻译为例如：
+
+```text
+[[LOCAL_TOOL: {"tool":"derpi","query":"twilight sparkle (alicorn), transparent background","limit":4,"after":"2024-01-01","before":"2025-01-01"}]]
+```
+
+然后本地工具再访问 Derpibooru；如果用户没有给出时间段，则选择最新图片；如果时间段内结果多于 `limit`，则随机挑选 `limit` 张。
 
 转码参数示例：
 
