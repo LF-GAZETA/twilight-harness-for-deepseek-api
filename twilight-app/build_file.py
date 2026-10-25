@@ -163,6 +163,7 @@ def main() -> int:
         APP / "ui_strings.py",
         APP / "attachments.py",
         APP / "markdown_tables.py",
+        APP / "math_text.py",
         APP / "local_actions.py",
         APP / "derpi.py",
         APP / "local_tools.py",

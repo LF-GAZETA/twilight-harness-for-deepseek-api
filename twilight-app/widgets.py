@@ -10,6 +10,7 @@ from tkinter import font as tkfont
 from typing import Callable, Sequence
 
 import markdown_tables
+import math_text
 import theme
 
 
@@ -1287,6 +1288,7 @@ def insert_markdown(
     quote_tag: str = "md_quote",
     table_tag: str = "md_table",
 ) -> None:
+    content = math_text.transform_markdown_math(content)
     lines = content.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     in_code = False
     code_lines: list[str] = []

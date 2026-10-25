@@ -337,6 +337,20 @@ def parse_request(text: str, items: list[attachments.Attachment]) -> LocalReques
         video = _first_video(items)
         if video is not None:
             return LocalRequest(kind="audio", title="Audio", attachment=video)
+    if "压片" in lower or "极限压缩" in lower or lower.startswith("/compress"):
+        video = _first_video(items)
+        if video is not None:
+            return LocalRequest(
+                kind="transcode",
+                title="Compress",
+                attachment=video,
+                target_format="mp4",
+                params={
+                    "resolution": "240p",
+                    "video_bitrate": "42k",
+                    "audio_bitrate": "14k",
+                },
+            )
     if any(word in lower for word in ("转码", "transcode")):
         video = _first_video(items)
         if video is not None:

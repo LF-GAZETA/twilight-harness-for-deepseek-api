@@ -16,6 +16,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+import paths
 import tag_table
 
 ALLOWED_RATINGS = ("safe", "suggestive", "semi-grimdark")
@@ -117,10 +118,48 @@ def downloads_dir() -> Path:
     return candidate
 
 
+def _is_writable(folder: Path) -> bool:
+    probe = folder / f".twilight_write_{os.getpid()}"
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        probe.write_bytes(b"x")
+        probe.unlink(missing_ok=True)
+        return True
+    except OSError:
+        try:
+            probe.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
+
+
 def save_dir() -> Path:
-    folder = downloads_dir() / "TwilightHarness"
-    folder.mkdir(parents=True, exist_ok=True)
-    return folder
+    """Return a writable Downloads-based output folder.
+
+    The normal target is Downloads/TwilightHarness.  If that folder is not
+    writable (ACL, antivirus, controlled-folder access, ...), try a sibling
+    folder, then Downloads itself, then Pictures or LocalAppData.  No folder is
+    ever deleted.
+    """
+    primary = downloads_dir()
+    candidates = [
+        primary / "TwilightHarness",
+        primary / "TwilightHarness-2",
+        primary / "TwilightHarness-3",
+        primary,
+        Path.home() / "Pictures" / "TwilightHarness",
+        paths.persistent_dir() / "downloads",
+    ]
+    for folder in candidates:
+        try:
+            if _is_writable(folder):
+                return folder
+        except OSError:
+            continue
+    raise DerpiError(
+        "no writable download folder found (Downloads/TwilightHarness, "
+        "Pictures/TwilightHarness and LocalAppData were all denied)"
+    )
 
 
 def _unique_output(folder: Path, stem: str, suffix: str) -> Path:

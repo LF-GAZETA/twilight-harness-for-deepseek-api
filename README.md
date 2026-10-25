@@ -23,7 +23,7 @@ Twilight Harness 是一个 **Windows 10/11 x64** 桌面应用。它通过兼容 
 
 | 版本 | 主要定位 | 体积 |
 | --- | --- | --- |
-| **标准版** `twilight-harness.exe` | 纯聊天 + 双栏思考 + Markdown / 表格 | **27.04 MB** |
+| **标准版** `twilight-harness.exe` | 纯聊天 + 双栏思考 + Markdown / 表格 | **27.05 MB** |
 | **附件版** `twilight-harness-file.exe` | 标准版全部功能 + 附件 / OCR / 识图 / 视频 / 本地工具 / 旧 Office 兼容 | **91.45 MB** |
 
 > 标准版不显示附件入口；附件版是功能超集，两者共享同一套 UI、API 配置和运行时清理机制。
@@ -49,6 +49,7 @@ Twilight Harness 是一个 **Windows 10/11 x64** 桌面应用。它通过兼容 
 | 双栏思考 / 输出 | ✅ | ✅ |
 | 两侧 Markdown 渲染 | ✅ | ✅ |
 | Markdown / HTML 表格渲染 | ✅ | ✅ |
+| 数学函数 / 公式渲染 | ✅ | ✅ |
 | 流式回复 | ✅ | ✅ |
 | 12 种界面语言 | ✅ | ✅ |
 | OpenAI 兼容 API | ✅ | ✅ |
@@ -59,6 +60,7 @@ Twilight Harness 是一个 **Windows 10/11 x64** 桌面应用。它通过兼容 
 | AI 识图（图片 / 视频抽帧） | — | ✅ |
 | 视频附件 | — | ✅ |
 | ffmpeg 音频分离 / 转码 | — | ✅ |
+| “压片”极限压缩（240p / 42kbps / 14kbps） | — | ✅ |
 | Real-ESRGAN 超分辨率 | — | ✅ |
 | Derpibooru 图片下载 | ✅ | ✅ |
 | 本地 20,000 Derpibooru tag 表 | ✅ | ✅ |
@@ -89,6 +91,7 @@ Twilight Harness 是一个 **Windows 10/11 x64** 桌面应用。它通过兼容 
 - 链接显示文本
 - **Markdown 管道表格**
 - **HTML `<table>` 表格**
+- **数学函数与公式**：`$...$`、`$$...$$`、`\(...\)`、`\[...\]` 会转换为 Unicode 数学记号
 
 表格会渲染成带边框、表头和列对齐的真实控件；中文、英文混排也会按列显示，而不是输出原始 `|` 文本。
 
@@ -204,6 +207,7 @@ Derpibooru 搜索允许 **safe / suggestive / semi-grimdark** 三个评级，对
 | `/upscale` | 图片 | Real-ESRGAN x4 动漫模型超分，保存 PNG |
 | `/audio` | 视频 | 分离音轨，保存 M4A |
 | `/transcode webm` | 视频 | 转码为 mp4 / webm / mkv / mov / gif，可设码率/分辨率/音频码率 |
+| `/compress` 或“压片” | 视频 | 极限压缩：240p、42 kbps 视频、14 kbps 音频 |
 
 自然语言也会触发对应工具，例如：
 
@@ -222,6 +226,14 @@ Derpibooru 搜索允许 **safe / suggestive / semi-grimdark** 三个评级，对
 搜索完成后会先在聊天区显示本次选中的 Derpibooru 图片编号，再开始从 `derpicdn.net` 下载。下载会优先使用完整图片，失败时回退到 CDN 的 large/medium/small 表示，并使用 curl 作为 TLS/反爬回退；如果全部失败，编号仍会保留，错误信息会附带图片 ID 与具体原因。
 
 如果 Downloads 目录本身不可写（例如被 Windows 受控文件夹访问拦截），会明确提示目录不可写，而不是笼统地报“没有可下载图片”。
+
+“压片”预置参数：
+
+```text
+/compress
+```
+
+或直接说“压片”“极限压缩这个视频”。输出为 MP4，240p，视频 42 kbps，音频 14 kbps。
 
 转码参数示例：
 
@@ -245,6 +257,8 @@ Derpibooru 搜索允许 **safe / suggestive / semi-grimdark** 三个评级，对
 ```
 
 该目录只在下载时写入，应用关闭清理不会触碰 Downloads。
+
+如果 `Downloads\TwilightHarness` 因 ACL、杀毒软件或 Windows 受控文件夹访问而不可写，程序会依次尝试 `Downloads\TwilightHarness-2`、Downloads 根目录、`Pictures\TwilightHarness` 和 `%LOCALAPPDATA%\TwilightHarness\downloads`，并在结果中显示实际路径，不会删除任何目录。
 
 ### 本地 Derpibooru tag 表
 
@@ -456,6 +470,7 @@ twilight-app/              Python + Tkinter 源码
   app.py                   页面状态与聊天流程
   widgets.py               自绘控件、窗口按钮、Markdown 渲染
   markdown_tables.py       Markdown / HTML 表格渲染
+  math_text.py             LaTeX/数学公式到 Unicode 的转换
   derpi.py                 Derpibooru 搜索、评级过滤与 derpicdn 下载
   tag_table.py             本地 20k tag 表加载、别名与多词 tag 解析
   local_actions.py         Real-ESRGAN / 音视频本地工具（附件版）
@@ -499,6 +514,8 @@ twilight-harness-file/     本地构建的附件版产物
 - 视频 12–72 帧抽帧、联系表、帧 OCR 和多模态请求；
 - Derpibooru 搜索（safe / suggestive / semi-grimdark）、逗号 tag 叠加与 derpicdn.net 下载；
 - 本地 20k tag 表与别名解析（artist: 4,058 / oc: 1,132 / fanfic: 17）；
+- 数学公式 Unicode 渲染；
+- 视频“压片”极限压缩参数；
 - 截图中 `sunny starcout` 类拼写会规范为 `sunny starscout`；
 - 模型 API 工具调用本地 Derpibooru / Real-ESRGAN / 音频分离 / 视频转码；
 - Real-ESRGAN 超分、ffmpeg 音频分离与转码；
@@ -520,7 +537,8 @@ twilight-harness-file/     本地构建的附件版产物
 - 图片 OCR 依赖 Windows OCR 语言包；
 - 扫描版 PDF 不会自动 OCR；
 - 视频解码、音频分离和转码使用随附件版打包的 ffmpeg；
-- 本地 tag 表是生成时快照，可能与最新 Derpibooru 数据存在差异。
+- 本地 tag 表是生成时快照，可能与最新 Derpibooru 数据存在差异；
+- 数学公式采用 Unicode 近似排版，不提供完整 LaTeX 排版引擎。
 - AI 识图/视频理解需要视觉模型；文本模型会回退到 OCR 文本；
 - 视频按 12–72 帧生成联系表并识别部分画面文字，不做完整时间轴理解或音频转写；
 - 没有自动更新器，也没有内置代理设置。

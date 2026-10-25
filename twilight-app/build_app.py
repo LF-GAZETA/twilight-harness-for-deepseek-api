@@ -138,6 +138,7 @@ def main() -> int:
         APP / "font_manager.py",
         APP / "ui_strings.py",
         APP / "markdown_tables.py",
+        APP / "math_text.py",
         APP / "derpi.py",
         APP / "local_tools.py",
         APP / "tag_table.py",

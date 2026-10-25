@@ -42,6 +42,7 @@ def system_prompt(allow_file_tools: bool) -> str:
             '- upscale：用 Real-ESRGAN x4 动漫模型放大最新附加的图片；无参数。',
             '- audio：分离最新附加视频的音轨；无参数。',
             '- transcode：转码最新附加视频。参数：format（mp4/webm/mkv/mov/gif）、video_bitrate（如 "2M"）、resolution（如 "720p"/"1280x720"）、audio_bitrate（如 "128k"）、fps（可选）。',
+            '  当用户说“压片/极限压缩”时，使用 transcode、format="mp4"、resolution="240p"、video_bitrate="42k"、audio_bitrate="14k"。',
             "需要图片/视频附件的工具只能使用本轮用户最新附加的附件。",
         ]
     lines += [
