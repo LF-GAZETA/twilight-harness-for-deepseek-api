@@ -1,4 +1,4 @@
-# Twilight Harness · 紫悦
+# Twilight Harness
 
 <p align="center">
   <strong>一个以 Twilight Sparkle / 紫悦 为主题的 Windows 桌面 AI 聊天客户端</strong><br>
