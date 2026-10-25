@@ -1,0 +1,27 @@
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 0, 0, 0),
+    prodvers=(1, 0, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable('080404b0', [
+        StringStruct('CompanyName', 'Unofficial fan project'),
+        StringStruct('FileDescription', 'Twilight Harness — chat with Twilight Sparkle'),
+        StringStruct('FileVersion', '1.0.0.0'),
+        StringStruct('InternalName', 'twilight-harness'),
+        StringStruct('OriginalFilename', 'twilight-harness.exe'),
+        StringStruct('ProductName', 'Twilight Harness'),
+        StringStruct('ProductVersion', '1.0.0.0'),
+        StringStruct('LegalCopyright', 'Unofficial fan project; My Little Pony © Hasbro')
+      ])
+    ]),
+    VarFileInfo([VarStruct('Translation', [2052, 1200])])
+  ]
+)

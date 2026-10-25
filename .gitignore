@@ -8,7 +8,10 @@ __pycache__/
 
 # Distribution / packaging
 .Python
-build/
+build/work/
+build/dist/
+build/file-build/
+build/*.spec
 develop-eggs/
 dist/
 downloads/
@@ -179,3 +182,15 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# Twilight Harness runtime folders and local build outputs
+/temp/
+/fonts/
+/data/
+/log/
+/twilight-harness/
+/twilight-harness-file/
+_MEI*/
+*.exe
+/tests/artifacts/
+/tests/screenshots/
