@@ -24,7 +24,7 @@ Twilight Harness 是一个 **Windows 10/11 x64** 桌面应用。它通过兼容 
 | 版本 | 主要定位 | 体积 |
 | --- | --- | --- |
 | **标准版** `twilight-harness.exe` | 纯聊天 + 双栏思考 + Markdown / 表格 | **26.74 MB** |
-| **附件版** `twilight-harness-file.exe` | 标准版全部功能 + 附件 / OCR / 识图 / 视频 / 旧 Office 兼容 | **81.11 MB** |
+| **附件版** `twilight-harness-file.exe` | 标准版全部功能 + 附件 / OCR / 识图 / 视频 / 本地工具 / 旧 Office 兼容 | **91.15 MB** |
 
 > 标准版不显示附件入口；附件版是功能超集，两者共享同一套 UI、API 配置和运行时清理机制。
 
@@ -58,6 +58,9 @@ Twilight Harness 是一个 **Windows 10/11 x64** 桌面应用。它通过兼容 
 | 图片 OCR | — | ✅ |
 | AI 识图（图片 / 视频抽帧） | — | ✅ |
 | 视频附件 | — | ✅ |
+| ffmpeg 音频分离 / 转码 | — | ✅ |
+| Real-ESRGAN 超分辨率 | — | ✅ |
+| Derpibooru 图片下载 | — | ✅ |
 | `.doc/.ppt/.xls` 临时转换 | — | ✅ |
 | 关闭清理 `fonts/`、`temp/`、`data/`、`log/` | ✅ | ✅ |
 
@@ -142,7 +145,7 @@ Ctrl + Enter 发送        Alt + Enter 添加附件
 | Python / JS / HTML / C/C++ 等源码 | 纯文本 |
 | `.doc/.ppt/.xls` | 通过 Office/WPS COM 临时转成 OOXML 后读取 |
 | `.png/.jpg/.jpeg/.bmp/.webp/.gif/.tiff` | Windows OCR + 视觉模型识图 |
-| `.mp4/.mov/.mkv/.avi/.webm/.m4v/.wmv/.flv/.ts` | 抽取 4 帧 + 视频帧 OCR + 视觉模型识图 |
+| `.mp4/.mov/.mkv/.avi/.webm/.m4v/.wmv/.flv/.ts` | 自适应抽取 12–72 帧 + 联系表 + 视频帧 OCR + 视觉模型识图 |
 
 ### 图片 OCR
 
@@ -155,10 +158,10 @@ Ctrl + Enter 发送        Alt + Enter 添加附件
 
 附件版会把图片压缩为最长边 2048 px 的 JPEG，并通过 OpenAI Chat Completions 兼容的 `image_url` 多模态格式发送给模型。
 
-视频会使用内置 ffmpeg 抽取 4 个时间点的画面，逐帧做本地 OCR，再把帧图片和 OCR 文本一起提供给模型。视频本身不会上传，只有抽取出的帧和文本会进入 API 请求。
+视频会使用内置 ffmpeg 根据时长自适应抽取 **12–72 帧**，按 4×3 排列成联系表（contact sheet），并抽 12 帧做本地 OCR。模型看到的是联系表和 OCR 文本，而不是原始视频；视频本身不会上传。
 
 - 支持视觉的模型可直接描述、识别、分析图片；
-- 默认单轮最多发送 4 张视觉图片；
+- 默认单轮最多发送 8 张视觉图片；视频以联系表形式发送。
 - 如果模型不支持图片输入（例如文本模型返回 400/415/422），程序会自动移除图片，改用本地 OCR 文本重试，并在思考栏提示：
 
   > 当前模型不支持图片输入，已自动改用图片文字识别。
@@ -176,6 +179,31 @@ Ctrl + Enter 发送        Alt + Enter 添加附件
 
 转换需要本机安装 Microsoft Office 或 WPS；未安装时会显示对应错误提示，不会上传原始文件到其他服务。
 
+### 本地工具（附件版）
+
+这些操作由本地程序直接完成，不经过模型 API，也不会删除用户的 Downloads 文件夹。
+
+| 命令 | 需要附件 | 输出 |
+| --- | --- | --- |
+| `/derpi <tags>` | 无 | 从 Derpibooru 搜索安全图片，经 `derpicdn.net` 下载到 Downloads |
+| `/upscale` | 图片 | Real-ESRGAN x4 动漫模型超分，保存 PNG |
+| `/audio` | 视频 | 分离音轨，保存 M4A |
+| `/transcode webm` | 视频 | 转码为 mp4 / webm / mkv / mov / gif |
+
+自然语言也会触发对应工具，例如：
+
+- “帮我找几张紫悦的呆站图片”
+- 附加图片后说“把这张图超分一下”
+- 附加视频后说“提取音频”或“转码成 webm”
+
+输出目录：
+
+```text
+%USERPROFILE%\Downloads\TwilightHarness\
+```
+
+该目录只在下载时写入，应用关闭清理不会触碰 Downloads。
+
 ### 附件限制
 
 - 文档/图片单文件最大 **25 MB**
@@ -183,7 +211,8 @@ Ctrl + Enter 发送        Alt + Enter 添加附件
 - 最多 **5 个附件**
 - 文档单文件最多 **60,000 字符**
 - 总附件上下文最多 **90,000 字符**
-- 单轮最多 **4 张视觉图片**（视频最多抽取 4 帧）
+- 单轮最多 **8 张视觉图片**（长视频通常为 6 张联系表）
+- 视频帧数按时长在 **12–72** 之间自适应
 - 超出限制会截断或提示
 
 ---
@@ -349,6 +378,7 @@ twilight-app/              Python + Tkinter 源码
   app.py                   页面状态与聊天流程
   widgets.py               自绘控件、窗口按钮、Markdown 渲染
   markdown_tables.py       Markdown / HTML 表格渲染
+  local_actions.py         Derpibooru / Real-ESRGAN / 音视频本地工具
   api_client.py            OpenAI 兼容客户端、SSE、配置
   attachments.py           PDF/Office/图片 OCR/识图提取
   ui_strings.py            12 种语言文案
@@ -360,6 +390,7 @@ twilight-app/              Python + Tkinter 源码
 
 assets/                    字体、头像、开场图等资源
 content/                   角色卡
+tools/realesrgan/          内嵌 Real-ESRGAN 运行库与动漫模型
 docs/images/               README 截图
 docs/design/               原始界面与头像设计参考
 build/                     图标、图标生成脚本与版本信息
@@ -382,7 +413,11 @@ twilight-harness-file/     本地构建的附件版产物
 - 图片 OCR（中文/英文测试图）；
 - 附件引用 `×` 撤销与发送时过滤；
 - 思考端、输出端 Markdown / 表格渲染；
-- 视频抽帧、帧 OCR 和多模态请求；
+- 视频 12–72 帧抽帧、联系表、帧 OCR 和多模态请求；
+- Derpibooru 安全图片搜索与 derpicdn.net 下载；
+- Real-ESRGAN 超分、ffmpeg 音频分离与转码；
+- Real-ESRGAN 图片超分；
+- ffmpeg 音频分离和视频转码；
 - 12 种语言界面；
 - 两个 EXE 的启动、字体释放、关闭清理。
 
@@ -398,9 +433,9 @@ twilight-harness-file/     本地构建的附件版产物
 - 附件版的 `.doc/.ppt/.xls` 转换依赖本机 Microsoft Office 或 WPS；
 - 图片 OCR 依赖 Windows OCR 语言包；
 - 扫描版 PDF 不会自动 OCR；
-- 视频解码使用随附件版打包的 ffmpeg；
+- 视频解码、音频分离和转码使用随附件版打包的 ffmpeg；
 - AI 识图/视频理解需要视觉模型；文本模型会回退到 OCR 文本；
-- 视频只抽取 4 帧并识别画面文字，不做完整时间轴理解或音频转写；
+- 视频按 12–72 帧生成联系表并识别部分画面文字，不做完整时间轴理解或音频转写；
 - 没有自动更新器，也没有内置代理设置。
 
 ---

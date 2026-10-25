@@ -27,10 +27,14 @@ MAX_FILE_BYTES = 25 * 1024 * 1024
 MAX_FILES = 5
 MAX_PER_FILE_CHARS = 60_000
 MAX_TOTAL_CHARS = 90_000
-MAX_VISION_IMAGES = 4
+MAX_VISION_IMAGES = 8
 VISION_MAX_DIMENSION = 2048
 MAX_VIDEO_BYTES = 250 * 1024 * 1024
-VIDEO_FRAME_COUNT = 4
+MIN_VIDEO_FRAMES = 12
+MAX_VIDEO_FRAMES = 72
+VIDEO_SHEET_COLS = 4
+VIDEO_SHEET_ROWS = 3
+VIDEO_OCR_FRAMES = 12
 
 _TEXT_SUFFIXES = {
     ".txt",
@@ -492,6 +496,11 @@ def _ffmpeg_path() -> str | None:
     return shutil.which("ffmpeg")
 
 
+def ffmpeg_executable() -> str | None:
+    """Public helper used by the local video tools."""
+    return _ffmpeg_path()
+
+
 def _run_process(args: list[str], timeout: int) -> subprocess.CompletedProcess:
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
     return subprocess.run(
@@ -515,6 +524,64 @@ def _parse_video_info(stderr: str) -> tuple[float, str]:
     return duration, resolution
 
 
+def _video_frame_count(duration: float) -> int:
+    if duration <= 0:
+        return MIN_VIDEO_FRAMES
+    return max(MIN_VIDEO_FRAMES, min(MAX_VIDEO_FRAMES, int(round(duration))))
+
+
+def _video_sheet_uris(frames: list[Path], duration: float, count: int) -> list[str]:
+    from PIL import Image, ImageDraw, ImageFont
+
+    uris: list[str] = []
+    try:
+        label_font = ImageFont.truetype(r"C:\Windows\Fonts\msyh.ttc", 18)
+    except Exception:  # noqa: BLE001
+        label_font = ImageFont.load_default()
+
+    per_sheet = VIDEO_SHEET_COLS * VIDEO_SHEET_ROWS
+    for sheet_index in range(0, len(frames), per_sheet):
+        chunk = frames[sheet_index : sheet_index + per_sheet]
+        try:
+            first = Image.open(chunk[0]).convert("RGB")
+        except Exception:  # noqa: BLE001
+            continue
+        tile_w = 400
+        tile_h = max(120, int(tile_w * first.height / max(1, first.width)))
+        label_h = 28
+        cell_h = tile_h + label_h
+        sheet = Image.new(
+            "RGB",
+            (VIDEO_SHEET_COLS * tile_w, VIDEO_SHEET_ROWS * cell_h),
+            (246, 235, 255),
+        )
+        draw = ImageDraw.Draw(sheet)
+        for offset, frame_path in enumerate(chunk):
+            row, col = divmod(offset, VIDEO_SHEET_COLS)
+            global_index = sheet_index + offset
+            seconds = (global_index / max(1, count - 1)) * max(0.0, duration)
+            try:
+                with Image.open(frame_path) as frame:
+                    frame = frame.convert("RGB")
+                    frame.thumbnail((tile_w, tile_h), Image.Resampling.LANCZOS)
+                    x = col * tile_w + (tile_w - frame.width) // 2
+                    y = row * cell_h + (tile_h - frame.height) // 2
+                    sheet.paste(frame, (x, y))
+            except Exception:  # noqa: BLE001
+                continue
+            draw.text(
+                (col * tile_w + 6, row * cell_h + tile_h + 3),
+                f"#{global_index + 1}  {seconds:.1f}s",
+                font=label_font,
+                fill=(30, 20, 45),
+            )
+        buffer = io.BytesIO()
+        sheet.save(buffer, format="JPEG", quality=84, optimize=True)
+        encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+        uris.append("data:image/jpeg;base64," + encoded)
+    return uris
+
+
 def _extract_video(path: Path) -> tuple[str, tuple[str, ...]]:
     ffmpeg = _ffmpeg_path()
     if not ffmpeg:
@@ -528,63 +595,73 @@ def _extract_video(path: Path) -> tuple[str, tuple[str, ...]]:
         raise AttachmentError("video", f"ffmpeg metadata: {exc}") from exc
     stderr = info.stderr.decode("utf-8", errors="replace")
     duration, resolution = _parse_video_info(stderr)
-    if duration <= 0:
-        times = [0.0, 0.5, 1.0, 2.0]
-    else:
-        times = [duration * fraction for fraction in (0.08, 0.30, 0.55, 0.82)]
+    count = _video_frame_count(duration)
 
-    uris: list[str] = []
-    ocr_parts: list[str] = []
     with tempfile.TemporaryDirectory(prefix="twilight-video-") as directory:
-        for index, seconds in enumerate(times[:VIDEO_FRAME_COUNT], start=1):
-            frame = Path(directory) / f"frame_{index}.jpg"
-            try:
-                result = _run_process(
-                    [
-                        ffmpeg,
-                        "-hide_banner",
-                        "-loglevel",
-                        "error",
-                        "-ss",
-                        f"{max(0.0, seconds):.3f}",
-                        "-i",
-                        str(path),
-                        "-frames:v",
-                        "1",
-                        "-vf",
-                        "scale='min(1600,iw)':-2",
-                        "-q:v",
-                        "3",
-                        "-y",
-                        str(frame),
-                    ],
-                    timeout=60,
-                )
-            except Exception as exc:  # noqa: BLE001
-                LOGGER.warning("Video frame extraction failed: %s", exc)
-                continue
-            if result.returncode != 0 or not frame.is_file() or frame.stat().st_size == 0:
-                LOGGER.warning("Video frame %s was not produced", index)
-                continue
-            try:
-                uris.append(_image_data_uri(frame))
-            except AttachmentError:
-                continue
+        frame_pattern = str(Path(directory) / "frame_%03d.jpg")
+        fps = count / max(0.1, duration) if duration > 0 else 1.0
+        try:
+            result = _run_process(
+                [
+                    ffmpeg,
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-i",
+                    str(path),
+                    "-vf",
+                    f"fps={max(0.01, fps):.6f},scale='min(960,iw)':-2",
+                    "-frames:v",
+                    str(count),
+                    "-q:v",
+                    "3",
+                    "-y",
+                    frame_pattern,
+                ],
+                timeout=180,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise AttachmentError("video", f"ffmpeg frame extraction: {exc}") from exc
+        if result.returncode != 0:
+            raise AttachmentError(
+                "video",
+                result.stderr.decode("utf-8", errors="replace")[-500:],
+            )
+        frames = sorted(Path(directory).glob("frame_*.jpg"))
+        if not frames:
+            raise AttachmentError("video", "no decodable video frames")
+
+        # OCR a sample of at most 12 frames; the model itself sees contact sheets.
+        sample_count = min(VIDEO_OCR_FRAMES, len(frames))
+        sample_indexes: list[int] = []
+        for i in range(sample_count):
+            if sample_count == 1:
+                sample_indexes.append(0)
+            else:
+                sample_indexes.append(round(i * (len(frames) - 1) / (sample_count - 1)))
+        sample_indexes = sorted(set(sample_indexes))
+        ocr_parts: list[str] = []
+        for index in sample_indexes:
+            frame = frames[index]
+            seconds = (index / max(1, len(frames) - 1)) * max(0.0, duration)
             try:
                 frame_text = _clean_text(_ocr_image_text(frame))
-                if frame_text:
-                    ocr_parts.append(f"[帧 {index} @ {seconds:.2f}s]\n{frame_text}")
             except AttachmentError:
-                pass
+                frame_text = ""
+            if frame_text:
+                ocr_parts.append(f"[帧 {index + 1} @ {seconds:.2f}s]\n{frame_text}")
+
+        uris = _video_sheet_uris(frames, duration, len(frames))
 
     if not uris:
-        raise AttachmentError("video", "no decodable video frames")
+        raise AttachmentError("video", "could not build video contact sheets")
     metadata = f"""视频附件：{path.name}
 时长：{duration:.2f} 秒
 分辨率：{resolution}
-已抽取 {len(uris)} 帧供视觉模型查看。"""
+已抽取 {len(frames)} 帧（根据时长在 12–72 帧之间自适应）。
+帧已按 4×3 排列成 {len(uris)} 张联系表，按时间从左到右、从上到下排列；每格标注了帧号与时间。"""
     if ocr_parts:
-        metadata += "\n\n视频帧 OCR：\n" + "\n\n".join(ocr_parts)
+        metadata += "\n\n视频帧 OCR 抽样：\n" + "\n\n".join(ocr_parts)
     return metadata, tuple(uris)
 
 

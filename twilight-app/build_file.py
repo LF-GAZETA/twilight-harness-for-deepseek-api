@@ -133,6 +133,18 @@ def main() -> int:
         print("ERROR: ffmpeg binary is required for the video-enabled file build", file=sys.stderr)
         return 2
     print(f"bundling ffmpeg: {ffmpeg_binary}")
+    realesrgan = ROOT / "tools" / "realesrgan"
+    required_tool_files = [
+        realesrgan / "realesrgan-ncnn-vulkan.exe",
+        realesrgan / "vcomp140.dll",
+        realesrgan / "models" / "realesrgan-x4plus-anime.bin",
+        realesrgan / "models" / "realesrgan-x4plus-anime.param",
+    ]
+    missing_tool_files = [str(path) for path in required_tool_files if not path.is_file()]
+    if missing_tool_files:
+        print("ERROR: Real-ESRGAN tool files are missing: " + ", ".join(missing_tool_files), file=sys.stderr)
+        return 2
+    print(f"bundling Real-ESRGAN: {realesrgan}")
 
     # Compile-check every app module before a slow PyInstaller build.
     modules = [
@@ -150,6 +162,7 @@ def main() -> int:
         APP / "ui_strings.py",
         APP / "attachments.py",
         APP / "markdown_tables.py",
+        APP / "local_actions.py",
         APP / "feature_flags.py",
     ]
     for module in modules:
@@ -202,6 +215,8 @@ def main() -> int:
         "imageio_ffmpeg",
         "--add-binary",
         f"{ffmpeg_binary};ffmpeg-bin",
+        "--add-data",
+        f"{realesrgan};realesrgan-bin",
         "--hidden-import",
         "pypdf",
         "--hidden-import",

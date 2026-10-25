@@ -185,6 +185,8 @@ def main() -> int:
         "lib2to3",
         "--exclude-module",
         "attachments",
+        "--exclude-module",
+        "local_actions",
         "--runtime-tmpdir",
         ".",
         "--add-data",

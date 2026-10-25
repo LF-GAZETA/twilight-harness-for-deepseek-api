@@ -51,8 +51,10 @@ SWP_FRAMECHANGED = 0x0020
 
 if feature_flags.ATTACHMENTS_ENABLED:
     import attachments
+    import local_actions
 else:  # standard build: attachment modules are excluded
     attachments = None
+    local_actions = None
 
 UI_STRINGS = ui_strings.UI_STRINGS
 _locale_for_label = ui_strings.locale_for_label
@@ -1392,6 +1394,63 @@ class TwilightApp:
     # ------------------------------------------------------------------
     # Sending / streaming
     # ------------------------------------------------------------------
+    def _start_local_request(self, request, content: str) -> None:
+        s = self._s
+        if request.error == "image":
+            self._append_right_text("\n" + s["local_need_image"] + "\n", "sys_error")
+            return
+        if request.error == "video":
+            self._append_right_text("\n" + s["local_need_video"] + "\n", "sys_error")
+            return
+        display = content
+        for item in self._pending_attachments:
+            display = display.replace(f"{item.name} ×", item.name)
+        display = display.strip()
+        self._sending = True
+        self._composer.clear()
+        self._pending_attachments.clear()
+        self._set_chat_status("thinking")
+        self._append_user_turn(display)
+        self._append_right_text("\n" + s["local_working"] + "\n", "sys_notice")
+
+        def work() -> None:
+            try:
+                paths = local_actions.run(request)
+            except Exception as exc:  # noqa: BLE001
+                api_client.LOGGER.exception("Local action failed")
+                self._queue.put(("local_error", str(exc)))
+                return
+            self._queue.put(("local_done", request.kind, [str(path) for path in paths]))
+
+        threading.Thread(target=work, name="twilight-local-action", daemon=True).start()
+
+    def _handle_local_done(self, kind: str, paths: list[str]) -> None:
+        if self._closed:
+            return
+        s = self._s
+        key = {
+            "derpi": "local_derpi_done",
+            "upscale": "local_upscale_done",
+            "audio": "local_audio_done",
+            "transcode": "local_transcode_done",
+        }.get(kind, "local_derpi_done")
+        message = s[key] + "\n" + "\n".join(paths)
+        self._append_right_text("\n" + message + "\n", "sys_notice")
+        self._sending = False
+        self._set_chat_status("ready")
+        self._focus_composer()
+
+    def _handle_local_error(self, message: str) -> None:
+        if self._closed:
+            return
+        self._append_right_text(
+            "\n" + self._s["local_failed"] + message + "\n",
+            "sys_error",
+        )
+        self._sending = False
+        self._set_chat_status("ready")
+        self._focus_composer()
+
     def _send_chat(self) -> None:
         if self._closed or self._mode != "chat" or self._sending or self._composer is None:
             return
@@ -1403,6 +1462,15 @@ class TwilightApp:
         content = self._composer.get_value().strip()
         if not content and not self._pending_attachments:
             return
+        if (
+            feature_flags.ATTACHMENTS_ENABLED
+            and local_actions is not None
+            and self._pending_attachments is not None
+        ):
+            request = local_actions.parse_request(content, self._pending_attachments)
+            if request is not None:
+                self._start_local_request(request, content)
+                return
         if not self._profile:
             self._append_right_text("\n" + self._s["missing_profile"] + "\n", "sys_error")
             return
@@ -1685,6 +1753,12 @@ class TwilightApp:
                 self._handle_chat_error(status, message)
             elif kind == "vision_fallback":
                 self._vision_fallback_notice = True
+            elif kind == "local_done":
+                _, local_kind, paths = events[index]
+                self._handle_local_done(local_kind, paths)
+            elif kind == "local_error":
+                _, local_message = events[index]
+                self._handle_local_error(local_message)
             index += 1
         if not self._closed:
             try:

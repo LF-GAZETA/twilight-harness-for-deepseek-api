@@ -192,5 +192,6 @@ cython_debug/
 /twilight-harness-file/
 _MEI*/
 *.exe
+!tools/realesrgan/*.exe
 /tests/artifacts/
 /tests/screenshots/
