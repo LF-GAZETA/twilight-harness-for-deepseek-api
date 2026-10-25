@@ -1485,6 +1485,7 @@ class TwilightApp:
         key = {
             "derpi": "local_derpi_done",
             "upscale": "local_upscale_done",
+            "video_upscale": "local_video_upscale_done",
             "audio": "local_audio_done",
             "transcode": "local_transcode_done",
         }.get(kind, "local_derpi_done")
@@ -1776,6 +1777,7 @@ class TwilightApp:
         key_by_tool = {
             "derpi": "local_derpi_done",
             "upscale": "local_upscale_done",
+            "video_upscale": "local_video_upscale_done",
             "audio": "local_audio_done",
             "transcode": "local_transcode_done",
         }

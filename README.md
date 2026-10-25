@@ -24,7 +24,7 @@ Twilight Harness 是一个 **Windows 10/11 x64** 桌面应用。它通过兼容 
 | 版本 | 主要定位 | 体积 |
 | --- | --- | --- |
 | **标准版** `twilight-harness.exe` | 纯聊天 + 双栏思考 + Markdown / 表格 | **27.28 MB** |
-| **附件版** `twilight-harness-file.exe` | 标准版全部功能 + 附件 / OCR / 识图 / 视频 / 本地工具 / 旧 Office 兼容 | **91.45 MB** |
+| **附件版** `twilight-harness-file.exe` | 标准版全部功能 + 附件 / OCR / 识图 / 视频 / 本地工具 / 旧 Office 兼容 | **91.46 MB** |
 
 > 标准版不显示附件入口；附件版是功能超集，两者共享同一套 UI、API 配置和运行时清理机制。
 
@@ -217,6 +217,7 @@ Derpibooru 搜索允许 **safe / suggestive / semi-grimdark** 三个评级，对
 | `/upscale` | 图片 | Real-ESRGAN x4 动漫模型超分，保存 PNG |
 | `/audio` | 视频 | 分离音轨，保存 M4A |
 | `/transcode webm` | 视频 | 转码为 mp4 / webm / mkv / mov / gif，可设码率/分辨率/音频码率 |
+| `/vupscale` | 视频 | 逐帧 Real-ESRGAN 4x 超分，保留音轨输出 MP4 |
 | `/compress` 或“压片” | 视频 | 极限压缩：240p、42 kbps 视频、14 kbps 音频 |
 
 自然语言也会触发对应工具，例如：
@@ -304,7 +305,7 @@ tools/fetch_derpibooru_tags.py
 - 最多 **5 个附件**
 - 文档单文件最多 **60,000 字符**
 - 总附件上下文最多 **90,000 字符**
-- 单轮最多 **8 张视觉图片**（长视频通常为 6 张联系表）
+- 单轮最多 **8 张视觉图片**（长视频通常为 6 张联系表）；附件数量上限 **32 个**，普通单文件上限 **50MB**；视频超过 50MB 时按时间切片（最多 64 片）处理，总大小上限 **2GB**
 - 视频帧数按时长在 **12–72** 之间自适应
 - 超出限制会截断或提示
 
@@ -547,6 +548,7 @@ twilight-harness-file/     本地构建的附件版产物
 - 图片 OCR 依赖 Windows OCR 语言包；
 - 扫描版 PDF 不会自动 OCR；
 - 视频解码、音频分离和转码使用随附件版打包的 ffmpeg；
+- 视频逐帧超分使用 Real-ESRGAN，并保留原音轨。
 - 本地 tag 表是生成时快照，可能与最新 Derpibooru 数据存在差异；
 - 数学公式采用 Unicode 近似排版，不提供完整 LaTeX 排版引擎。
 - AI 识图/视频理解需要视觉模型；文本模型会回退到 OCR 文本；

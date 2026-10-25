@@ -23,13 +23,15 @@ import paths
 
 LOGGER = logging.getLogger("twilight_harness")
 
-MAX_FILE_BYTES = 25 * 1024 * 1024
-MAX_FILES = 5
+MAX_FILE_BYTES = 50 * 1024 * 1024
+MAX_FILES = 32
 MAX_PER_FILE_CHARS = 60_000
 MAX_TOTAL_CHARS = 90_000
 MAX_VISION_IMAGES = 8
 VISION_MAX_DIMENSION = 2048
-MAX_VIDEO_BYTES = 250 * 1024 * 1024
+MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024
+MAX_VIDEO_SLICES = 64
+VIDEO_SLICE_BYTES = 50 * 1024 * 1024
 MIN_VIDEO_FRAMES = 12
 MAX_VIDEO_FRAMES = 72
 VIDEO_SHEET_COLS = 4
@@ -665,6 +667,89 @@ def _extract_video(path: Path) -> tuple[str, tuple[str, ...]]:
     return metadata, tuple(uris)
 
 
+def _extract_video_sliced(path: Path, size: int) -> tuple[str, tuple[str, ...]]:
+    """Handle a >50 MB video by slicing it into up to 64 equal parts.
+
+    Each slice contributes one representative frame and OCR sample, rather than
+    decoding the entire multi-gigabyte file into hundreds of contact sheets.
+    """
+    ffmpeg = _ffmpeg_path()
+    if not ffmpeg:
+        raise AttachmentError("video", "ffmpeg executable not found")
+    try:
+        info = _run_process([ffmpeg, "-hide_banner", "-i", str(path)], timeout=30)
+    except Exception as exc:  # noqa: BLE001
+        raise AttachmentError("video", f"ffmpeg metadata: {exc}") from exc
+    stderr = info.stderr.decode("utf-8", errors="replace")
+    duration, resolution = _parse_video_info(stderr)
+    slices = min(
+        MAX_VIDEO_SLICES,
+        max(2, int((size + VIDEO_SLICE_BYTES - 1) // VIDEO_SLICE_BYTES)),
+    )
+    frames: list[Path] = []
+    with tempfile.TemporaryDirectory(prefix="twilight-video-slices-") as directory:
+        for index in range(slices):
+            midpoint = ((index + 0.5) / slices) * max(0.0, duration)
+            output = Path(directory) / f"slice_{index:03d}.jpg"
+            args = [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-ss",
+                f"{midpoint:.3f}",
+                "-i",
+                str(path),
+                "-frames:v",
+                "1",
+                "-vf",
+                "scale='min(960,iw)':-2",
+                "-q:v",
+                "3",
+                "-y",
+                str(output),
+            ]
+            try:
+                _run_process(args, timeout=60)
+            except Exception:  # noqa: BLE001
+                continue
+            if output.is_file() and output.stat().st_size > 0:
+                frames.append(output)
+        if not frames:
+            raise AttachmentError("video", "no decodable video frames in slices")
+
+        sample_count = min(VIDEO_OCR_FRAMES, len(frames))
+        indexes = sorted(
+            {
+                round(i * (len(frames) - 1) / max(1, sample_count - 1))
+                for i in range(sample_count)
+            }
+        )
+        ocr_parts: list[str] = []
+        for frame_index in indexes:
+            frame = frames[frame_index]
+            seconds = ((frame_index + 0.5) / max(1, len(frames))) * max(0.0, duration)
+            try:
+                frame_text = _clean_text(_ocr_image_text(frame))
+            except AttachmentError:
+                frame_text = ""
+            if frame_text:
+                ocr_parts.append(f"[切片帧 {frame_index + 1} @ {seconds:.2f}s]\n{frame_text}")
+        uris = _video_sheet_uris(frames, duration, len(frames))
+
+    if not uris:
+        raise AttachmentError("video", "could not build sliced video contact sheets")
+    metadata = f"""视频附件：{path.name}
+时长：{duration:.2f} 秒
+分辨率：{resolution}
+文件大小：{size / 1024 / 1024:.1f} MB，超过 50MB 单文件上限。
+已切分为 {slices} 个时间片（最多 64 片，平均每片约 {size / slices / 1024 / 1024:.1f} MB），逐片抽取代表帧，共 {len(frames)} 帧。
+帧已按 4×3 排列成 {len(uris)} 张联系表，按时间顺序从左到右、从上到下排列。"""
+    if ocr_parts:
+        metadata += "\n\n切片帧 OCR 抽样：\n" + "\n\n".join(ocr_parts)
+    return metadata, tuple(uris)
+
+
 def extract_attachment(path: str | Path) -> Attachment:
     path = Path(path)
     try:
@@ -689,7 +774,10 @@ def extract_attachment(path: str | Path) -> Attachment:
                 raise
             text = ""
     elif suffix in _VIDEO_SUFFIXES:
-        text, image_uris = _extract_video(path)
+        if stat.st_size > MAX_FILE_BYTES:
+            text, image_uris = _extract_video_sliced(path, stat.st_size)
+        else:
+            text, image_uris = _extract_video(path)
     elif suffix in _LEGACY_SUFFIXES:
         text = _extract_legacy(path, suffix)
     elif suffix == ".pdf":

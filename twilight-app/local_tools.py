@@ -41,6 +41,7 @@ def system_prompt(allow_file_tools: bool) -> str:
     if allow_file_tools:
         lines += [
             '- upscale：用 Real-ESRGAN x4 动漫模型放大最新附加的图片；无参数。',
+            '- video_upscale：对最新附加视频逐帧执行 Real-ESRGAN x4 超分，并保留音轨；无参数。',
             '- audio：分离最新附加视频的音轨；无参数。',
             '- transcode：转码最新附加视频。参数：format（mp4/webm/mkv/mov/gif）、video_bitrate（如 "2M"）、resolution（如 "720p"/"1280x720"）、audio_bitrate（如 "128k"）、fps（可选）。',
             '  当用户说“压片/极限压缩”时，使用 transcode、format="mp4"、resolution="240p"、video_bitrate="42k"、audio_bitrate="14k"。',
@@ -58,7 +59,7 @@ def _valid_call(call: Any, allow_file_tools: bool) -> bool:
     tool = str(call.get("tool") or "").strip().lower()
     allowed = {"derpi"}
     if allow_file_tools:
-        allowed |= {"upscale", "audio", "transcode"}
+        allowed |= {"upscale", "video_upscale", "audio", "transcode"}
     return tool in allowed
 
 
@@ -160,6 +161,11 @@ def execute_calls(
                 if image is None:
                     raise local_actions.LocalActionError("please attach an image first")
                 paths = local_actions._upscale(Path(image.path))
+            elif tool == "video_upscale":
+                video = _find_attachment(attachments, "video")
+                if video is None:
+                    raise local_actions.LocalActionError("please attach a video first")
+                paths = local_actions._video_upscale(Path(video.path))
             elif tool == "audio":
                 video = _find_attachment(attachments, "video")
                 if video is None:

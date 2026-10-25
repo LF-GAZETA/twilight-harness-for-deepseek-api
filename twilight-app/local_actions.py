@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -151,6 +152,168 @@ def _upscale(image: Path) -> list[Path]:
             return [output]
         errors.append(result.stderr.decode("utf-8", errors="replace")[-500:])
     raise LocalActionError("Real-ESRGAN failed: " + (" | ".join(errors[-2:])))
+
+
+def _video_fps(video: Path) -> float:
+    ffmpeg = _ffmpeg()
+    try:
+        result = subprocess.run(
+            [ffmpeg, "-hide_banner", "-i", str(video)],
+            capture_output=True,
+            timeout=30,
+            creationflags=_creation_flags(),
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise LocalActionError(f"video metadata failed: {exc}") from exc
+    stderr = result.stderr.decode("utf-8", errors="replace")
+    match = re.search(r"(\d+(?:\.\d+)?)\s*fps\b", stderr)
+    if match:
+        try:
+            value = float(match.group(1))
+            if 1 <= value <= 240:
+                return value
+        except ValueError:
+            pass
+    return 30.0
+
+
+def _video_upscale(video: Path) -> list[Path]:
+    """Upscale every video frame with Real-ESRGAN, then restore the audio."""
+    tool = _real_esrgan_dir()
+    ffmpeg = _ffmpeg()
+    fps = _video_fps(video)
+    output = _unique_output(_save_dir(), f"{video.stem}_realesrgan_x4", ".mp4")
+    with tempfile.TemporaryDirectory(prefix=".twilight-video-esrgan-", dir=str(_save_dir())) as directory:
+        root = Path(directory)
+        input_dir = root / "frames"
+        output_dir = root / "upscaled"
+        input_dir.mkdir()
+        output_dir.mkdir()
+        extract_command = [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(video),
+            "-vsync",
+            "0",
+            "-qscale:v",
+            "2",
+            str(input_dir / "%06d.png"),
+        ]
+        try:
+            result = subprocess.run(
+                extract_command,
+                capture_output=True,
+                timeout=3600,
+                creationflags=_creation_flags(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise LocalActionError(f"video frame extraction failed: {exc}") from exc
+        frames = sorted(input_dir.glob("*.png"))
+        if result.returncode != 0 or not frames:
+            raise LocalActionError(
+                "video frame extraction failed: "
+                + result.stderr.decode("utf-8", errors="replace")[-500:]
+            )
+        commands = [
+            [
+                str(tool / "realesrgan-ncnn-vulkan.exe"),
+                "-i",
+                str(input_dir),
+                "-o",
+                str(output_dir),
+                "-n",
+                "realesrgan-x4plus-anime",
+                "-s",
+                "4",
+                "-f",
+                "png",
+            ],
+            [
+                str(tool / "realesrgan-ncnn-vulkan.exe"),
+                "-i",
+                str(input_dir),
+                "-o",
+                str(output_dir),
+                "-n",
+                "realesrgan-x4plus-anime",
+                "-s",
+                "4",
+                "-f",
+                "png",
+                "-g",
+                "-1",
+            ],
+        ]
+        errors: list[str] = []
+        for command in commands:
+            try:
+                result = subprocess.run(
+                    command,
+                    cwd=str(tool),
+                    capture_output=True,
+                    timeout=7200,
+                    creationflags=_creation_flags(),
+                )
+            except Exception as exc:  # noqa: BLE001
+                errors.append(str(exc))
+                continue
+            if result.returncode == 0 and any(output_dir.glob("*.png")):
+                break
+            errors.append(result.stderr.decode("utf-8", errors="replace")[-500:])
+        else:
+            raise LocalActionError("Real-ESRGAN video frames failed: " + " | ".join(errors[-2:]))
+        encode_command = [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-framerate",
+            f"{fps:g}",
+            "-i",
+            str(output_dir / "%06d.png"),
+            "-i",
+            str(video),
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0?",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "medium",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-shortest",
+            "-movflags",
+            "+faststart",
+            str(output),
+        ]
+        try:
+            result = subprocess.run(
+                encode_command,
+                capture_output=True,
+                timeout=3600,
+                creationflags=_creation_flags(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise LocalActionError(f"video encode failed: {exc}") from exc
+        if result.returncode != 0 or not output.is_file() or output.stat().st_size == 0:
+            raise LocalActionError(
+                "video encode failed: "
+                + result.stderr.decode("utf-8", errors="replace")[-500:]
+            )
+    return [output]
 
 
 def _extract_audio(video: Path) -> list[Path]:
@@ -305,6 +468,11 @@ def parse_request(text: str, items: list[attachments.Attachment]) -> LocalReques
     m = re.match(r"^/(derpi|derpibooru)\b\s*(.*)$", raw, re.IGNORECASE | re.DOTALL)
     if m:
         return LocalRequest(kind="derpi", title="Derpibooru", query=m.group(2).strip() or "twilight sparkle")
+    if re.match(r"^/vupscale\b", lower):
+        video = _first_video(items)
+        if video is None:
+            return LocalRequest(kind="video_upscale", title="Real-ESRGAN Video", error="video")
+        return LocalRequest(kind="video_upscale", title="Real-ESRGAN Video", attachment=video)
     if re.match(r"^/upscale\b", lower):
         image = _first_image(items)
         if image is None:
@@ -329,7 +497,14 @@ def parse_request(text: str, items: list[attachments.Attachment]) -> LocalReques
         )
 
     # Natural-language convenience triggers (Derpibooru is model-translated).
+    if any(word in lower for word in ("视频超分", "逐帧超分", "逐帧放大", "video upscale", "vupscale")):
+        video = _first_video(items)
+        if video is not None:
+            return LocalRequest(kind="video_upscale", title="Real-ESRGAN Video", attachment=video)
     if any(word in lower for word in ("超分", "超分辨率", "放大", "upscale", "esrgan")):
+        video = _first_video(items)
+        if video is not None:
+            return LocalRequest(kind="video_upscale", title="Real-ESRGAN Video", attachment=video)
         image = _first_image(items)
         if image is not None:
             return LocalRequest(kind="upscale", title="Real-ESRGAN", attachment=image)
@@ -376,6 +551,8 @@ def run(request: LocalRequest) -> list[Path]:
         raise LocalActionError("missing attachment")
     if request.kind == "upscale":
         return _upscale(request.attachment.path)
+    if request.kind == "video_upscale":
+        return _video_upscale(request.attachment.path)
     if request.kind == "audio":
         return _extract_audio(request.attachment.path)
     if request.kind == "transcode":
