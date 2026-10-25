@@ -406,6 +406,9 @@ python twilight-app/build_app.py
 
 # 附件版
 python twilight-app/build_file.py
+
+# 带可见调试后台控制台的附件版
+python twilight-app/build_debug.py
 ```
 
 构建输出：
@@ -413,7 +416,13 @@ python twilight-app/build_file.py
 ```text
 twilight-harness/twilight-harness.exe
 twilight-harness-file/twilight-harness-file.exe
+twilight-harness-file-debug/twilight-harness-file-debug.exe
 ```
+
+调试构建使用 PyInstaller `--console`，双击 EXE 会同时打开 GUI 与标题为
+“Twilight Harness Debug Backend”的调试控制台，不需要额外的 `.cmd`
+启动脚本；关闭 GUI 后控制台随之关闭。调试日志同时写入
+`temp/twilight-harness.log`。
 
 ### 直接运行源码
 
@@ -445,6 +454,7 @@ twilight-app/              Python + Tkinter 源码
   paths.py                 路径与运行时清理
   build_app.py             标准版构建脚本
   build_file.py            附件版构建脚本
+  build_debug.py           带调试控制台的附件版构建脚本
 
 assets/                    字体、头像、开场图、Derpibooru tag 表
 content/                   角色卡

@@ -73,8 +73,26 @@ def _set_app_id() -> None:
         pass
 
 
+def _is_debug_build() -> bool:
+    """The debug executable enables its console by its file name too."""
+    if os.environ.get("TWILIGHT_DEBUG"):
+        return True
+    if getattr(sys, "_MEIPASS", None) and "debug" in Path(sys.executable).stem.lower():
+        return True
+    return False
+
+
+def _set_console_title() -> None:
+    if os.name != "nt" or not _is_debug_build():
+        return
+    try:
+        ctypes.windll.kernel32.SetConsoleTitleW("Twilight Harness Debug Backend")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _configure_logging() -> None:
-    debug = bool(os.environ.get("TWILIGHT_DEBUG"))
+    debug = _is_debug_build()
     level = logging.DEBUG if debug else logging.INFO
     root = logging.getLogger()
     root.setLevel(level)
@@ -88,7 +106,7 @@ def _configure_logging() -> None:
         root.addHandler(file_handler)
     except OSError:
         pass
-    if debug:
+    if debug and sys.stderr is not None:
         stream = logging.StreamHandler()
         stream.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
         root.addHandler(stream)
@@ -119,6 +137,7 @@ def main() -> int:
     _enable_dpi_awareness()
     _set_app_id()
     _configure_logging()
+    _set_console_title()
     try:
         import paths
 

@@ -11,6 +11,7 @@ __pycache__/
 build/work/
 build/dist/
 build/file-build/
+build/debug-build/
 build/*.spec
 develop-eggs/
 dist/
@@ -195,3 +196,5 @@ _MEI*/
 !tools/realesrgan/*.exe
 /tests/artifacts/
 /tests/screenshots/
+
+/twilight-harness-file-debug/
