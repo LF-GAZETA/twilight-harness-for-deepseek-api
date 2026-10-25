@@ -10,10 +10,16 @@ import asyncio
 import base64
 import io
 import logging
+import os
 import re
+import shutil
+import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+
+import paths
 
 LOGGER = logging.getLogger("twilight_harness")
 
@@ -23,6 +29,8 @@ MAX_PER_FILE_CHARS = 60_000
 MAX_TOTAL_CHARS = 90_000
 MAX_VISION_IMAGES = 4
 VISION_MAX_DIMENSION = 2048
+MAX_VIDEO_BYTES = 250 * 1024 * 1024
+VIDEO_FRAME_COUNT = 4
 
 _TEXT_SUFFIXES = {
     ".txt",
@@ -63,6 +71,7 @@ _TEXT_SUFFIXES = {
 }
 
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
+_VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".wmv", ".flv", ".ts"}
 _LEGACY_SUFFIXES = {".doc": ".docx", ".xls": ".xlsx", ".ppt": ".pptx"}
 
 
@@ -81,6 +90,7 @@ class Attachment:
     text: str
     truncated: bool = False
     image_uri: str = ""
+    image_uris: tuple[str, ...] = ()
 
     @property
     def char_count(self) -> int:
@@ -424,15 +434,158 @@ def _image_data_uri(path: Path) -> str:
 
 
 def build_vision_content(text: str, items: list[Attachment]) -> list[dict]:
-    """Build OpenAI-compatible multimodal content parts for image attachments."""
+    """Build OpenAI-compatible multimodal content parts for image/video input."""
     parts: list[dict] = [{"type": "text", "text": text}]
     count = 0
     for item in items:
-        if not item.image_uri or count >= MAX_VISION_IMAGES:
-            continue
-        parts.append({"type": "image_url", "image_url": {"url": item.image_uri}})
-        count += 1
+        candidates: list[str] = []
+        if item.image_uri:
+            candidates.append(item.image_uri)
+        candidates.extend(item.image_uris)
+        seen: set[str] = set()
+        for uri in candidates:
+            if not uri or uri in seen or count >= MAX_VISION_IMAGES:
+                continue
+            seen.add(uri)
+            parts.append({"type": "image_url", "image_url": {"url": uri}})
+            count += 1
+            if count >= MAX_VISION_IMAGES:
+                break
     return parts
+
+
+def _ffmpeg_path() -> str | None:
+    override = os.environ.get("TWILIGHT_FFMPEG")
+    candidates: list[Path] = []
+    if override:
+        candidates.append(Path(override))
+    meipass = getattr(sys, "_MEIPASS", None)
+    directories: list[Path] = []
+    if meipass:
+        directories.append(Path(meipass) / "ffmpeg-bin")
+        directories.append(Path(meipass))
+    directories.append(paths.resource_base() / "ffmpeg-bin")
+    for directory in directories:
+        candidate = directory / "ffmpeg.exe"
+        if candidate.is_file():
+            return str(candidate)
+        try:
+            for match in sorted(directory.glob("ffmpeg*.exe")):
+                if match.is_file():
+                    return str(match)
+        except OSError:
+            pass
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                return str(candidate)
+        except OSError:
+            pass
+    try:
+        import imageio_ffmpeg
+
+        executable = Path(imageio_ffmpeg.get_ffmpeg_exe())
+        if executable.is_file():
+            return str(executable)
+    except Exception:  # noqa: BLE001
+        pass
+    return shutil.which("ffmpeg")
+
+
+def _run_process(args: list[str], timeout: int) -> subprocess.CompletedProcess:
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    return subprocess.run(
+        args,
+        capture_output=True,
+        timeout=timeout,
+        creationflags=flags,
+    )
+
+
+def _parse_video_info(stderr: str) -> tuple[float, str]:
+    duration = 0.0
+    resolution = "未知分辨率"
+    match = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", stderr)
+    if match:
+        hours, minutes, seconds = match.groups()
+        duration = int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+    size_match = re.search(r"Video:.*?(\d{2,5})x(\d{2,5})", stderr)
+    if size_match:
+        resolution = f"{size_match.group(1)}x{size_match.group(2)}"
+    return duration, resolution
+
+
+def _extract_video(path: Path) -> tuple[str, tuple[str, ...]]:
+    ffmpeg = _ffmpeg_path()
+    if not ffmpeg:
+        raise AttachmentError("video", "ffmpeg executable not found")
+    try:
+        info = _run_process(
+            [ffmpeg, "-hide_banner", "-i", str(path)],
+            timeout=30,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise AttachmentError("video", f"ffmpeg metadata: {exc}") from exc
+    stderr = info.stderr.decode("utf-8", errors="replace")
+    duration, resolution = _parse_video_info(stderr)
+    if duration <= 0:
+        times = [0.0, 0.5, 1.0, 2.0]
+    else:
+        times = [duration * fraction for fraction in (0.08, 0.30, 0.55, 0.82)]
+
+    uris: list[str] = []
+    ocr_parts: list[str] = []
+    with tempfile.TemporaryDirectory(prefix="twilight-video-") as directory:
+        for index, seconds in enumerate(times[:VIDEO_FRAME_COUNT], start=1):
+            frame = Path(directory) / f"frame_{index}.jpg"
+            try:
+                result = _run_process(
+                    [
+                        ffmpeg,
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-ss",
+                        f"{max(0.0, seconds):.3f}",
+                        "-i",
+                        str(path),
+                        "-frames:v",
+                        "1",
+                        "-vf",
+                        "scale='min(1600,iw)':-2",
+                        "-q:v",
+                        "3",
+                        "-y",
+                        str(frame),
+                    ],
+                    timeout=60,
+                )
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("Video frame extraction failed: %s", exc)
+                continue
+            if result.returncode != 0 or not frame.is_file() or frame.stat().st_size == 0:
+                LOGGER.warning("Video frame %s was not produced", index)
+                continue
+            try:
+                uris.append(_image_data_uri(frame))
+            except AttachmentError:
+                continue
+            try:
+                frame_text = _clean_text(_ocr_image_text(frame))
+                if frame_text:
+                    ocr_parts.append(f"[帧 {index} @ {seconds:.2f}s]\n{frame_text}")
+            except AttachmentError:
+                pass
+
+    if not uris:
+        raise AttachmentError("video", "no decodable video frames")
+    metadata = f"""视频附件：{path.name}
+时长：{duration:.2f} 秒
+分辨率：{resolution}
+已抽取 {len(uris)} 帧供视觉模型查看。"""
+    if ocr_parts:
+        metadata += "\n\n视频帧 OCR：\n" + "\n\n".join(ocr_parts)
+    return metadata, tuple(uris)
 
 
 def extract_attachment(path: str | Path) -> Attachment:
@@ -443,18 +596,23 @@ def extract_attachment(path: str | Path) -> Attachment:
         raise AttachmentError("read", str(exc)) from exc
     if not path.is_file():
         raise AttachmentError("read", "not a file")
-    if stat.st_size > MAX_FILE_BYTES:
-        raise AttachmentError("too_large", f"{stat.st_size / 1024 / 1024:.1f} MB")
     suffix = path.suffix.lower()
+    limit = MAX_VIDEO_BYTES if suffix in _VIDEO_SUFFIXES else MAX_FILE_BYTES
+    if stat.st_size > limit:
+        raise AttachmentError("too_large", f"{stat.st_size / 1024 / 1024:.1f} MB")
     image_uri = ""
+    image_uris: tuple[str, ...] = ()
     if suffix in _IMAGE_SUFFIXES:
         image_uri = _image_data_uri(path)
+        image_uris = (image_uri,)
         try:
             text = _ocr_image_text(path)
         except AttachmentError as exc:
             if exc.code != "ocr":
                 raise
             text = ""
+    elif suffix in _VIDEO_SUFFIXES:
+        text, image_uris = _extract_video(path)
     elif suffix in _LEGACY_SUFFIXES:
         text = _extract_legacy(path, suffix)
     elif suffix == ".pdf":
@@ -484,6 +642,7 @@ def extract_attachment(path: str | Path) -> Attachment:
         text=text,
         truncated=truncated,
         image_uri=image_uri,
+        image_uris=image_uris,
     )
 
 

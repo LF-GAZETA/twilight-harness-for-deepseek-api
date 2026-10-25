@@ -122,6 +122,17 @@ def main() -> int:
     version_file = BUILD / "version_info.txt"
     (BUILD / "file-build").mkdir(parents=True, exist_ok=True)
     version_file.write_text(VERSION_INFO, encoding="utf-8")
+    try:
+        import imageio_ffmpeg
+
+        ffmpeg_binary = Path(imageio_ffmpeg.get_ffmpeg_exe())
+    except Exception:
+        found = shutil.which("ffmpeg")
+        ffmpeg_binary = Path(found) if found else None
+    if ffmpeg_binary is None or not ffmpeg_binary.is_file():
+        print("ERROR: ffmpeg binary is required for the video-enabled file build", file=sys.stderr)
+        return 2
+    print(f"bundling ffmpeg: {ffmpeg_binary}")
 
     # Compile-check every app module before a slow PyInstaller build.
     modules = [
@@ -138,6 +149,7 @@ def main() -> int:
         APP / "font_manager.py",
         APP / "ui_strings.py",
         APP / "attachments.py",
+        APP / "markdown_tables.py",
         APP / "feature_flags.py",
     ]
     for module in modules:
@@ -186,6 +198,10 @@ def main() -> int:
         "sqlite3",
         "--exclude-module",
         "lib2to3",
+        "--exclude-module",
+        "imageio_ffmpeg",
+        "--add-binary",
+        f"{ffmpeg_binary};ffmpeg-bin",
         "--hidden-import",
         "pypdf",
         "--hidden-import",

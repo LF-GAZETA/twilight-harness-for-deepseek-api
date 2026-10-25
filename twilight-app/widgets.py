@@ -9,6 +9,7 @@ import tkinter as tk
 from tkinter import font as tkfont
 from typing import Callable, Sequence
 
+import markdown_tables
 import theme
 
 
@@ -1284,11 +1285,14 @@ def insert_markdown(
     heading_tag: str = "md_heading",
     bullet_tag: str = "md_bullet",
     quote_tag: str = "md_quote",
+    table_tag: str = "md_table",
 ) -> None:
     lines = content.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     in_code = False
     code_lines: list[str] = []
-    for line in lines:
+    index = 0
+    while index < len(lines):
+        line = lines[index]
         if line.startswith("```"):
             if in_code:
                 _flush_code(widget, code_lines, codeblock_tag, base_tag)
@@ -1297,39 +1301,51 @@ def insert_markdown(
             else:
                 in_code = True
                 code_lines = []
+            index += 1
             continue
         if in_code:
             code_lines.append(line)
+            index += 1
             continue
         if not line.strip():
             widget.insert("end-1c", "\n", base_tag)
+            index += 1
+            continue
+        table_end = markdown_tables.try_insert_table(
+            widget, lines, index, base_tag, table_tag
+        )
+        if table_end is not None:
+            index = table_end
             continue
         heading = re.match(r"^(#{1,6})\s+(.*)$", line)
         if heading:
             widget.insert("end-1c", heading.group(2).strip() + "\n", heading_tag)
+            index += 1
             continue
         quote = re.match(r"^>\s?(.*)$", line)
         if quote:
             widget.insert("end-1c", "  " + quote.group(1).strip() + "\n", quote_tag)
+            index += 1
             continue
         bullet = re.match(r"^(\s*)[-*+]\s+(.*)$", line)
         if bullet:
             widget.insert("end-1c", "·  ", bullet_tag)
             _insert_inline(widget, bullet.group(2), base_tag, bold_tag, italic_tag, code_tag)
             widget.insert("end-1c", "\n", base_tag)
+            index += 1
             continue
         numbered = re.match(r"^\s*(\d+[.)])\s+(.*)$", line)
         if numbered:
             widget.insert("end-1c", f"  {numbered.group(1)}  ", bullet_tag)
             _insert_inline(widget, numbered.group(2), base_tag, bold_tag, italic_tag, code_tag)
             widget.insert("end-1c", "\n", base_tag)
+            index += 1
             continue
         _insert_inline(widget, line, base_tag, bold_tag, italic_tag, code_tag)
         widget.insert("end-1c", "\n", base_tag)
+        index += 1
     if in_code:
         _flush_code(widget, code_lines, codeblock_tag, base_tag)
-
-
 def _flush_code(widget: tk.Text, lines: list[str], codeblock_tag: str, base_tag: str) -> None:
     if not lines:
         return

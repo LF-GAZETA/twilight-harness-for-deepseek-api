@@ -933,6 +933,7 @@ class TwilightApp:
         body_italic = theme.body(11, slant="italic", locale=self._content_locale)
         small = theme.ui(8, locale=self._ui_locale)
         mono = theme.font(9, family=theme.MONO_FAMILY)
+        table_font = theme.body(9, locale=self._content_locale)
         for widget in (self._think_text, self._right_text):
             if widget is None:
                 continue
@@ -1038,6 +1039,12 @@ class TwilightApp:
                 lmargin2=10,
                 spacing1=2,
                 spacing3=3,
+            )
+            widget.tag_configure(
+                "md_table",
+                font=table_font,
+                foreground=theme.BLACK,
+                background=theme.WHITE,
             )
 
     def _bind_wheel(self, widget: tk.Text) -> None:
@@ -1271,6 +1278,7 @@ class TwilightApp:
             "read": s["attach_error_read"],
             "ocr": s["attach_error_ocr"],
             "legacy": s["attach_error_legacy"],
+            "video": s["attach_error_video"],
         }
         message = mapping.get(exc.code, s["attach_error_read"])
         if filename:
@@ -1306,6 +1314,12 @@ class TwilightApp:
                 ("JPEG", "*.jpg"),
                 ("BMP", "*.bmp"),
                 ("WebP", "*.webp"),
+                ("MP4", "*.mp4"),
+                ("MOV", "*.mov"),
+                ("MKV", "*.mkv"),
+                ("AVI", "*.avi"),
+                ("WebM", "*.webm"),
+                ("WMV", "*.wmv"),
                 (s["all_files"], "*.*"),
             ],
         )
@@ -1393,8 +1407,13 @@ class TwilightApp:
             self._append_right_text("\n" + self._s["missing_profile"] + "\n", "sys_error")
             return
         attachment_context, attachment_names = self._send_attachment_context()
+        for name in attachment_names:
+            content = content.replace(f"{name} ×", name)
+        content = content.strip()
         image_items = [
-            item for item in self._pending_attachments if getattr(item, "image_uri", "")
+            item
+            for item in self._pending_attachments
+            if getattr(item, "image_uri", "") or getattr(item, "image_uris", ())
         ]
         if not content:
             content = " ".join(attachment_names)

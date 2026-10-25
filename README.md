@@ -23,8 +23,8 @@ Twilight Harness 是一个 **Windows 10/11 x64** 桌面应用。它通过兼容 
 
 | 版本 | 主要定位 | 体积 |
 | --- | --- | --- |
-| **标准版** `twilight-harness.exe` | 纯聊天 + 双栏思考 + Markdown | **26.68 MB** |
-| **附件版** `twilight-harness-file.exe` | 标准版全部功能 + 附件 / OCR / 识图 / 旧 Office 兼容 | **51.42 MB** |
+| **标准版** `twilight-harness.exe` | 纯聊天 + 双栏思考 + Markdown / 表格 | **26.74 MB** |
+| **附件版** `twilight-harness-file.exe` | 标准版全部功能 + 附件 / OCR / 识图 / 视频 / 旧 Office 兼容 | **81.11 MB** |
 
 > 标准版不显示附件入口；附件版是功能超集，两者共享同一套 UI、API 配置和运行时清理机制。
 
@@ -48,6 +48,7 @@ Twilight Harness 是一个 **Windows 10/11 x64** 桌面应用。它通过兼容 
 | --- | :---: | :---: |
 | 双栏思考 / 输出 | ✅ | ✅ |
 | 两侧 Markdown 渲染 | ✅ | ✅ |
+| Markdown / HTML 表格渲染 | ✅ | ✅ |
 | 流式回复 | ✅ | ✅ |
 | 12 种界面语言 | ✅ | ✅ |
 | OpenAI 兼容 API | ✅ | ✅ |
@@ -55,7 +56,8 @@ Twilight Harness 是一个 **Windows 10/11 x64** 桌面应用。它通过兼容 
 | 可撤销附件引用 | — | ✅ |
 | PDF / Word / PowerPoint / Excel / 文本提取 | — | ✅ |
 | 图片 OCR | — | ✅ |
-| AI 识图（视觉模型） | — | ✅ |
+| AI 识图（图片 / 视频抽帧） | — | ✅ |
+| 视频附件 | — | ✅ |
 | `.doc/.ppt/.xls` 临时转换 | — | ✅ |
 | 关闭清理 `fonts/`、`temp/`、`data/`、`log/` | ✅ | ✅ |
 
@@ -81,6 +83,14 @@ Twilight Harness 是一个 **Windows 10/11 x64** 桌面应用。它通过兼容 
 - 有序 / 无序列表
 - 引用块
 - 链接显示文本
+- **Markdown 管道表格**
+- **HTML `<table>` 表格**
+
+表格会渲染成带边框、表头和列对齐的真实控件；中文、英文混排也会按列显示，而不是输出原始 `|` 文本。
+
+<p align="center">
+  <img src="docs/images/markdown-tables.png" width="720" alt="双栏 Markdown 表格渲染">
+</p>
 
 流式生成期间可能短暂显示原始标记，生成完成后统一变为格式化文本。
 
@@ -132,6 +142,7 @@ Ctrl + Enter 发送        Alt + Enter 添加附件
 | Python / JS / HTML / C/C++ 等源码 | 纯文本 |
 | `.doc/.ppt/.xls` | 通过 Office/WPS COM 临时转成 OOXML 后读取 |
 | `.png/.jpg/.jpeg/.bmp/.webp/.gif/.tiff` | Windows OCR + 视觉模型识图 |
+| `.mp4/.mov/.mkv/.avi/.webm/.m4v/.wmv/.flv/.ts` | 抽取 4 帧 + 视频帧 OCR + 视觉模型识图 |
 
 ### 图片 OCR
 
@@ -140,9 +151,11 @@ Ctrl + Enter 发送        Alt + Enter 添加附件
 - OCR 提取到的文字会作为附件上下文发送给模型；
 - 图片同时可以被支持视觉的模型直接查看。
 
-### AI 识图
+### AI 识图 / 视频理解
 
 附件版会把图片压缩为最长边 2048 px 的 JPEG，并通过 OpenAI Chat Completions 兼容的 `image_url` 多模态格式发送给模型。
+
+视频会使用内置 ffmpeg 抽取 4 个时间点的画面，逐帧做本地 OCR，再把帧图片和 OCR 文本一起提供给模型。视频本身不会上传，只有抽取出的帧和文本会进入 API 请求。
 
 - 支持视觉的模型可直接描述、识别、分析图片；
 - 默认单轮最多发送 4 张视觉图片；
@@ -165,11 +178,12 @@ Ctrl + Enter 发送        Alt + Enter 添加附件
 
 ### 附件限制
 
-- 单文件最大 **25 MB**
+- 文档/图片单文件最大 **25 MB**
+- 视频单文件最大 **250 MB**
 - 最多 **5 个附件**
-- 单文件最多 **60,000 字符**
+- 文档单文件最多 **60,000 字符**
 - 总附件上下文最多 **90,000 字符**
-- 单轮最多 **4 张视觉图片**
+- 单轮最多 **4 张视觉图片**（视频最多抽取 4 帧）
 - 超出限制会截断或提示
 
 ---
@@ -294,6 +308,7 @@ TWILIGHT_MODEL
 ```powershell
 python -m pip install pyinstaller
 python -m pip install pypdf python-docx python-pptx openpyxl pillow pywin32
+python -m pip install imageio-ffmpeg
 python -m pip install winrt-runtime winrt-Windows.Media.Ocr winrt-Windows.Graphics.Imaging winrt-Windows.Storage.Streams winrt-Windows.Foundation winrt-Windows.Foundation.Collections winrt-Windows.Globalization winrt-Windows.Media
 ```
 
@@ -333,6 +348,7 @@ twilight-app/              Python + Tkinter 源码
   main.py                  入口、日志、DPI、生命周期
   app.py                   页面状态与聊天流程
   widgets.py               自绘控件、窗口按钮、Markdown 渲染
+  markdown_tables.py       Markdown / HTML 表格渲染
   api_client.py            OpenAI 兼容客户端、SSE、配置
   attachments.py           PDF/Office/图片 OCR/识图提取
   ui_strings.py            12 种语言文案
@@ -365,7 +381,8 @@ twilight-harness-file/     本地构建的附件版产物
 - `.doc/.ppt/.xls` 经 Office/WPS 转换后读取；
 - 图片 OCR（中文/英文测试图）；
 - 附件引用 `×` 撤销与发送时过滤；
-- 思考端、输出端 Markdown 渲染；
+- 思考端、输出端 Markdown / 表格渲染；
+- 视频抽帧、帧 OCR 和多模态请求；
 - 12 种语言界面；
 - 两个 EXE 的启动、字体释放、关闭清理。
 
@@ -381,7 +398,9 @@ twilight-harness-file/     本地构建的附件版产物
 - 附件版的 `.doc/.ppt/.xls` 转换依赖本机 Microsoft Office 或 WPS；
 - 图片 OCR 依赖 Windows OCR 语言包；
 - 扫描版 PDF 不会自动 OCR；
-- AI 识图需要视觉模型；文本模型会回退到 OCR；
+- 视频解码使用随附件版打包的 ffmpeg；
+- AI 识图/视频理解需要视觉模型；文本模型会回退到 OCR 文本；
+- 视频只抽取 4 帧并识别画面文字，不做完整时间轴理解或音频转写；
 - 没有自动更新器，也没有内置代理设置。
 
 ---
