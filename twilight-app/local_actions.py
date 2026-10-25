@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,6 +30,11 @@ import derpi
 
 class LocalActionError(Exception):
     pass
+
+
+# Real-ESRGAN/Vulkan cannot reliably run multiple instances at once on a single
+# GPU; serialize it and retry transient "invalid gpu device" failures.
+_ESRGAN_LOCK = threading.Lock()
 
 
 @dataclass
@@ -118,61 +124,64 @@ def _emit_progress(progress, row_id: str, kind: str, name: str,
         pass
 
 
+def _run_realesrgan(tool: Path, input_path: Path, output_path: Path, progress=None) -> None:
+    command = [
+        str(tool / "realesrgan-ncnn-vulkan.exe"),
+        "-i",
+        str(input_path),
+        "-o",
+        str(output_path),
+        "-n",
+        "realesrgan-x4plus-anime",
+        "-s",
+        "4",
+        "-f",
+        "png",
+    ]
+    errors: list[str] = []
+    with _ESRGAN_LOCK:
+        for attempt in range(3):
+            if output_path.is_dir():
+                try:
+                    for item in output_path.iterdir():
+                        item.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            try:
+                result = subprocess.run(
+                    command,
+                    cwd=str(tool),
+                    capture_output=True,
+                    timeout=7200,
+                    creationflags=_creation_flags(),
+                )
+            except Exception as exc:  # noqa: BLE001
+                errors.append(str(exc))
+                time.sleep(1.0 + attempt)
+                continue
+            stderr = result.stderr.decode("utf-8", errors="replace")
+            valid = output_path.is_file() and output_path.stat().st_size > 0
+            if output_path.is_dir():
+                valid = any(output_path.glob("*.png"))
+            if result.returncode == 0 and valid:
+                return
+            errors.append(stderr[-500:])
+            time.sleep(1.0 + attempt)
+    raise LocalActionError("Real-ESRGAN failed: " + (" | ".join(errors[-2:])))
+
+
 def _upscale(image: Path, progress=None) -> list[Path]:
     tool = _real_esrgan_dir()
     row_id = f"realesrgan-{image.stem}"
     _emit_progress(progress, row_id, "realesrgan", image.stem, 0.05)
     output = _unique_output(_save_dir(), f"{image.stem}_realesrgan_x4", ".png")
-    commands = [
-        [
-            str(tool / "realesrgan-ncnn-vulkan.exe"),
-            "-i",
-            str(image),
-            "-o",
-            str(output),
-            "-n",
-            "realesrgan-x4plus-anime",
-            "-s",
-            "4",
-            "-f",
-            "png",
-        ],
-        [
-            str(tool / "realesrgan-ncnn-vulkan.exe"),
-            "-i",
-            str(image),
-            "-o",
-            str(output),
-            "-n",
-            "realesrgan-x4plus-anime",
-            "-s",
-            "4",
-            "-f",
-            "png",
-            "-g",
-            "-1",
-        ],
-    ]
-    errors: list[str] = []
-    for command in commands:
-        try:
-            result = subprocess.run(
-                command,
-                cwd=str(tool),
-                capture_output=True,
-                timeout=600,
-                creationflags=_creation_flags(),
-            )
-        except Exception as exc:  # noqa: BLE001
-            errors.append(str(exc))
-            continue
-        if result.returncode == 0 and output.is_file() and output.stat().st_size > 0:
-            _emit_progress(progress, row_id, "realesrgan", image.stem, 1.0, "done")
-            return [output]
-        errors.append(result.stderr.decode("utf-8", errors="replace")[-500:])
-    _emit_progress(progress, row_id, "realesrgan", image.stem, 0.0, "error")
-    raise LocalActionError("Real-ESRGAN failed: " + (" | ".join(errors[-2:])))
-
+    try:
+        _run_realesrgan(tool, image, output)
+    except Exception:
+        _emit_progress(progress, row_id, "realesrgan", image.stem, 0.0, "error")
+        raise
+    _emit_progress(progress, row_id, "realesrgan", image.stem, 1.0, "done")
+    return [output]
 
 def _video_fps(video: Path) -> float:
     ffmpeg = _ffmpeg()
@@ -243,56 +252,12 @@ def _video_upscale(video: Path, progress=None) -> list[Path]:
                 "video frame extraction failed: "
                 + result.stderr.decode("utf-8", errors="replace")[-500:]
             )
-        commands = [
-            [
-                str(tool / "realesrgan-ncnn-vulkan.exe"),
-                "-i",
-                str(input_dir),
-                "-o",
-                str(output_dir),
-                "-n",
-                "realesrgan-x4plus-anime",
-                "-s",
-                "4",
-                "-f",
-                "png",
-            ],
-            [
-                str(tool / "realesrgan-ncnn-vulkan.exe"),
-                "-i",
-                str(input_dir),
-                "-o",
-                str(output_dir),
-                "-n",
-                "realesrgan-x4plus-anime",
-                "-s",
-                "4",
-                "-f",
-                "png",
-                "-g",
-                "-1",
-            ],
-        ]
-        errors: list[str] = []
-        for command in commands:
-            try:
-                result = subprocess.run(
-                    command,
-                    cwd=str(tool),
-                    capture_output=True,
-                    timeout=7200,
-                    creationflags=_creation_flags(),
-                )
-            except Exception as exc:  # noqa: BLE001
-                errors.append(str(exc))
-                continue
-            if result.returncode == 0 and any(output_dir.glob("*.png")):
-                break
-            errors.append(result.stderr.decode("utf-8", errors="replace")[-500:])
-        else:
+        try:
+            _run_realesrgan(tool, input_dir, output_dir)
+        except Exception:
             _emit_progress(progress, esrgan_row, "realesrgan", video.stem, 0.0, "error")
             _emit_progress(progress, ffmpeg_row, "ffmpeg", video.stem, 0.0, "error")
-            raise LocalActionError("Real-ESRGAN video frames failed: " + " | ".join(errors[-2:]))
+            raise
         _emit_progress(progress, esrgan_row, "realesrgan", video.stem, 1.0, "done")
         _emit_progress(progress, ffmpeg_row, "ffmpeg", video.stem, 0.65)
         encode_command = [

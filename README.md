@@ -283,6 +283,8 @@ Derpibooru 搜索允许 **safe / suggestive / semi-grimdark** 三个评级，对
 - 视频逐帧超分显示 `Real-ESRGAN: <文件名>` 和 `ffmpeg: <文件名>` 两条进度；
 - 任务很多时最多保留最近 80 行，避免界面卡顿。
 
+Real-ESRGAN 的 Vulkan/GPU 调用会串行执行，并在出现 `invalid gpu device` 等瞬时 GPU 错误时自动清理半成品并重试最多 3 次。
+
 ### 本地 Derpibooru tag 表
 
 两个版本都内嵌一份本地 tag 表：
