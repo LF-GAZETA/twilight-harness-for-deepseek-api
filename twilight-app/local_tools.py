@@ -111,6 +111,7 @@ def execute_calls(
     calls: list[dict],
     attachments: list,
     allow_file_tools: bool,
+    on_progress=None,
 ) -> list[ToolOutcome]:
     outcomes: list[ToolOutcome] = []
     for call in calls[:3]:
@@ -126,12 +127,23 @@ def execute_calls(
                     limit = 4
                 after = str(call.get("after") or "").strip()
                 before = str(call.get("before") or "").strip()
-                paths = derpi.search_download(
+                selected = derpi.find_images(
                     query,
                     max(1, min(8, limit)),
                     after=after,
                     before=before,
                 )
+                ids = [str(item.get("id")) for item in selected if item.get("id")]
+                if on_progress is not None:
+                    try:
+                        on_progress("derpi", ids)
+                    except Exception:  # noqa: BLE001
+                        pass
+                paths = derpi.download_selected(selected, max(1, min(8, limit)))
+                if not paths:
+                    raise derpi.DerpiError(
+                        "no downloadable derpicdn.net images were returned for the selected image IDs"
+                    )
                 outcomes.append(ToolOutcome(tool="derpi", paths=[str(p) for p in paths]))
             except Exception as exc:  # noqa: BLE001
                 outcomes.append(ToolOutcome(tool="derpi", error=str(exc)))

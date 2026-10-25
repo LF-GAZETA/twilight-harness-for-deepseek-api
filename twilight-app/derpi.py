@@ -291,33 +291,42 @@ def _download_images(images: list[dict], limit: int) -> list[Path]:
             suffix = ".png"
         image_id = str(image.get("id") or int(time.time() * 1000))
         target = _unique_output(folder, f"derpibooru_{image_id}", suffix)
+        data: bytes | None = None
+        for attempt in range(2):
+            try:
+                req = urllib.request.Request(
+                    view_url,
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) TwilightHarness/1.0",
+                        "Referer": "https://derpibooru.org/",
+                    },
+                )
+                with urllib.request.urlopen(req, timeout=60) as response:
+                    payload = response.read(30 * 1024 * 1024 + 1)
+                if len(payload) <= 30 * 1024 * 1024:
+                    data = payload
+                    break
+            except Exception:  # noqa: BLE001
+                if attempt == 0:
+                    time.sleep(0.4)
+        if not data:
+            continue
         try:
-            req = urllib.request.Request(view_url, headers={"User-Agent": "TwilightHarness/1.0"})
-            with urllib.request.urlopen(req, timeout=60) as response:
-                data = response.read(30 * 1024 * 1024 + 1)
-            if len(data) > 30 * 1024 * 1024:
-                continue
             target.write_bytes(data)
-        except Exception:  # noqa: BLE001
+        except OSError:
             continue
         if target.is_file() and target.stat().st_size > 0:
             saved.append(target)
     return saved
 
 
-def search_download(
+def find_images(
     query,
     limit: int = 4,
     after: str | None = None,
     before: str | None = None,
-) -> list[Path]:
-    """Search Derpibooru and download images.
-
-    - No time range: return the newest available images.
-    - Time range with more results than the limit: request a random ordering
-      and take the first *limit*.
-    - Time range with fewer results: take all available results.
-    """
+) -> list[dict]:
+    """Return selected image records (with IDs) before downloading."""
     limit = max(1, min(8, int(limit or 4)))
     raw_tags = query if isinstance(query, (list, tuple)) else extract_tags(str(query))
     tags: list[str] = []
@@ -338,19 +347,29 @@ def search_download(
     terms.append(f"({allowed})")
     q = ", ".join(terms)
 
-    # First look up the newest results (and get the total for the date range).
     newest = _search_payload(q, limit, "created_at")
     total = int(newest.get("total") or 0)
     images = newest.get("images") or []
     if not images:
         raise DerpiError(f"Derpibooru returned no images for tags: {q}")
     if (after_date or before_date) and total > limit:
-        # A time range contains more images than the requested count: randomize.
         images = _search_payload(q, limit, "random").get("images") or images
-    saved = _download_images(images, limit)
+    return images[:limit]
+
+
+def download_selected(images: list[dict], limit: int) -> list[Path]:
+    return _download_images(images, max(1, min(8, int(limit or 4))))
+
+
+def search_download(
+    query,
+    limit: int = 4,
+    after: str | None = None,
+    before: str | None = None,
+) -> list[Path]:
+    """Backward-compatible convenience wrapper: select and download."""
+    images = find_images(query, limit=limit, after=after, before=before)
+    saved = download_selected(images, max(1, min(8, int(limit or 4))))
     if not saved:
-        raise DerpiError(
-            f"no downloadable derpicdn.net images were returned for tags: {q} "
-            f"(total={total}, limit={limit})"
-        )
+        raise DerpiError("no downloadable derpicdn.net images were returned for the selected image IDs")
     return saved

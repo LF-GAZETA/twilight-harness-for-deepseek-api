@@ -24,7 +24,7 @@ Twilight Harness 是一个 **Windows 10/11 x64** 桌面应用。它通过兼容 
 | 版本 | 主要定位 | 体积 |
 | --- | --- | --- |
 | **标准版** `twilight-harness.exe` | 纯聊天 + 双栏思考 + Markdown / 表格 | **27.04 MB** |
-| **附件版** `twilight-harness-file.exe` | 标准版全部功能 + 附件 / OCR / 识图 / 视频 / 本地工具 / 旧 Office 兼容 | **91.44 MB** |
+| **附件版** `twilight-harness-file.exe` | 标准版全部功能 + 附件 / OCR / 识图 / 视频 / 本地工具 / 旧 Office 兼容 | **91.45 MB** |
 
 > 标准版不显示附件入口；附件版是功能超集，两者共享同一套 UI、API 配置和运行时清理机制。
 
@@ -218,6 +218,8 @@ Derpibooru 搜索允许 **safe / suggestive / semi-grimdark** 三个评级，对
 ```
 
 然后本地工具再访问 Derpibooru；如果用户没有给出时间段，则选择最新图片；如果时间段内结果多于 `limit`，则随机挑选 `limit` 张。
+
+搜索完成后会先在聊天区显示本次选中的 Derpibooru 图片编号，再开始从 `derpicdn.net` 下载；如果下载失败，编号仍会保留，便于核对或重试。
 
 转码参数示例：
 

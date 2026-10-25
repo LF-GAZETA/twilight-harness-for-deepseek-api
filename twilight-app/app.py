@@ -1413,7 +1413,14 @@ class TwilightApp:
 
         def work() -> None:
             try:
-                paths = derpi.search_download(query, 4)
+                images = derpi.find_images(query, 4)
+                ids = [str(item.get("id")) for item in images if item.get("id")]
+                self._queue.put(("tool_progress", "derpi", ids))
+                paths = derpi.download_selected(images, 4)
+                if not paths:
+                    raise derpi.DerpiError(
+                        "no downloadable derpicdn.net images were returned for the selected image IDs"
+                    )
             except Exception as exc:  # noqa: BLE001
                 api_client.LOGGER.exception("Derpibooru download failed")
                 self._queue.put(("local_error", str(exc)))
@@ -1707,6 +1714,9 @@ class TwilightApp:
                         tool_calls,
                         attachments_for_tools,
                         feature_flags.ATTACHMENTS_ENABLED,
+                        on_progress=lambda tool, ids: self._queue.put(
+                            ("tool_progress", tool, ids)
+                        ),
                     )
                 except Exception as exc:  # noqa: BLE001
                     api_client.LOGGER.exception("Local tool execution failed")
@@ -1718,6 +1728,14 @@ class TwilightApp:
         self._sending = False
         self._set_chat_status("ready")
         self._focus_composer()
+
+    def _handle_tool_progress(self, tool: str, ids: list[str]) -> None:
+        if self._closed or tool != "derpi" or not ids:
+            return
+        self._append_right_text(
+            "\n" + self._s["local_ids_found"] + "\n" + ", ".join(ids) + "\n",
+            "sys_notice",
+        )
 
     def _handle_tools_done(self, outcomes) -> None:
         if self._closed:
@@ -1830,6 +1848,9 @@ class TwilightApp:
                 self._handle_chat_error(status, message)
             elif kind == "vision_fallback":
                 self._vision_fallback_notice = True
+            elif kind == "tool_progress":
+                _, progress_tool, ids = events[index]
+                self._handle_tool_progress(progress_tool, ids)
             elif kind == "local_done":
                 _, local_kind, paths = events[index]
                 self._handle_local_done(local_kind, paths)
