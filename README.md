@@ -219,7 +219,9 @@ Derpibooru 搜索允许 **safe / suggestive / semi-grimdark** 三个评级，对
 
 然后本地工具再访问 Derpibooru；如果用户没有给出时间段，则选择最新图片；如果时间段内结果多于 `limit`，则随机挑选 `limit` 张。
 
-搜索完成后会先在聊天区显示本次选中的 Derpibooru 图片编号，再开始从 `derpicdn.net` 下载；如果下载失败，编号仍会保留，便于核对或重试。
+搜索完成后会先在聊天区显示本次选中的 Derpibooru 图片编号，再开始从 `derpicdn.net` 下载。下载会优先使用完整图片，失败时回退到 CDN 的 large/medium/small 表示，并使用 curl 作为 TLS/反爬回退；如果全部失败，编号仍会保留，错误信息会附带图片 ID 与具体原因。
+
+如果 Downloads 目录本身不可写（例如被 Windows 受控文件夹访问拦截），会明确提示目录不可写，而不是笼统地报“没有可下载图片”。
 
 转码参数示例：
 

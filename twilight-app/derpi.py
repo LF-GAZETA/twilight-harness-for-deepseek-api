@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
+import subprocess
 import time
 import urllib.parse
 import urllib.request
@@ -272,54 +274,159 @@ def _search_payload(q: str, limit: int, sort: str) -> dict:
         raise DerpiError(f"Derpibooru search failed: {exc}") from exc
 
 
+_LAST_DOWNLOAD_ERRORS: list[str] = []
+
+
+def _probe_writable(folder: Path) -> None:
+    probe = folder / f".twilight_write_{os.getpid()}"
+    try:
+        probe.write_bytes(b"x")
+        probe.unlink(missing_ok=True)
+    except OSError as exc:
+        raise DerpiError(
+            f"Downloads folder is not writable: {folder} ({exc.strerror or exc})"
+        ) from exc
+
+
+def _safe_image_urls(image: dict) -> list[str]:
+    """Prefer the full view URL, then CDN representation fallbacks."""
+    urls: list[str] = []
+    view_url = str(image.get("view_url") or image.get("image") or "")
+    if view_url:
+        urls.append(view_url)
+    representations = image.get("representations") or {}
+    if isinstance(representations, dict):
+        for key in ("full", "large", "medium", "small", "thumb"):
+            value = representations.get(key)
+            if isinstance(value, str) and value:
+                urls.append(value)
+    result: list[str] = []
+    for url in urls:
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme != "https" or not (
+            parsed.netloc == "derpicdn.net" or parsed.netloc.endswith(".derpicdn.net")
+        ):
+            continue
+        if url not in result:
+            result.append(url)
+    return result
+
+
+def _curl_download(url: str, target: Path) -> tuple[bool, str]:
+    curl = shutil.which("curl.exe") or shutil.which("curl")
+    if not curl:
+        return False, "curl unavailable"
+    part = target.with_name(target.name + ".part")
+    command = [
+        curl,
+        "-L",
+        "--fail",
+        "--silent",
+        "--show-error",
+        "--retry",
+        "2",
+        "--connect-timeout",
+        "15",
+        "--max-time",
+        "120",
+        "-A",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128 Safari/537.36",
+        "-e",
+        "https://derpibooru.org/",
+        "-o",
+        str(part),
+        url,
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            timeout=150,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return False, f"curl: {exc}"
+    if result.returncode == 0 and part.is_file() and 0 < part.stat().st_size <= 30 * 1024 * 1024:
+        try:
+            part.replace(target)
+            return True, ""
+        except OSError as exc:
+            return False, f"write: {exc}"
+    try:
+        part.unlink(missing_ok=True)
+    except OSError:
+        pass
+    detail = result.stderr.decode("utf-8", errors="replace").strip()[-160:]
+    return False, f"curl HTTP {result.returncode}: {detail}"
+
+
+def _download_one(image: dict, folder: Path) -> Path | None:
+    image_id = str(image.get("id") or int(time.time() * 1000))
+    urls = _safe_image_urls(image)
+    if not urls:
+        _LAST_DOWNLOAD_ERRORS.append(f"{image_id}: no derpicdn.net URL")
+        return None
+    suffix = Path(urllib.parse.urlparse(urls[0]).path).suffix.lower()
+    fmt = str(image.get("format") or "").lower()
+    if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+        suffix = "." + fmt if fmt in {"png", "jpg", "jpeg", "webp", "gif"} else ".png"
+    target = _unique_output(folder, f"derpibooru_{image_id}", suffix)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    part = target.with_name(target.name + ".part")
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128 Safari/537.36",
+        "Referer": "https://derpibooru.org/",
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    last_error = ""
+    for url in urls:
+        for attempt in range(3):
+            try:
+                request = urllib.request.Request(url, headers=headers)
+                with urllib.request.urlopen(request, timeout=60) as response:
+                    payload = response.read(30 * 1024 * 1024 + 1)
+                if 0 < len(payload) <= 30 * 1024 * 1024:
+                    part.write_bytes(payload)
+                    part.replace(target)
+                    return target
+                last_error = f"HTTP body size {len(payload)}"
+            except Exception as exc:  # noqa: BLE001
+                last_error = f"{type(exc).__name__}: {exc}"
+            if attempt < 2:
+                time.sleep(0.5 * (attempt + 1))
+        # A browser-like curl fallback helps when urllib/TLS is blocked.
+        ok, curl_error = _curl_download(url, target)
+        if ok:
+            return target
+        last_error = curl_error or last_error
+        try:
+            part.unlink(missing_ok=True)
+        except OSError:
+            pass
+    _LAST_DOWNLOAD_ERRORS.append(f"{image_id}: {last_error or 'download failed'}")
+    return None
+
+
 def _download_images(images: list[dict], limit: int) -> list[Path]:
+    _LAST_DOWNLOAD_ERRORS.clear()
     folder = save_dir()
+    _probe_writable(folder)
     saved: list[Path] = []
     for image in images:
         if len(saved) >= limit:
             break
         if not _is_allowed(image):
             continue
-        view_url = str(image.get("view_url") or image.get("image") or "")
-        parsed = urllib.parse.urlparse(view_url)
-        if parsed.scheme != "https" or not (
-            parsed.netloc == "derpicdn.net" or parsed.netloc.endswith(".derpicdn.net")
-        ):
-            continue
-        suffix = Path(parsed.path).suffix.lower()
-        if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
-            suffix = ".png"
-        image_id = str(image.get("id") or int(time.time() * 1000))
-        target = _unique_output(folder, f"derpibooru_{image_id}", suffix)
-        data: bytes | None = None
-        for attempt in range(2):
-            try:
-                req = urllib.request.Request(
-                    view_url,
-                    headers={
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) TwilightHarness/1.0",
-                        "Referer": "https://derpibooru.org/",
-                    },
-                )
-                with urllib.request.urlopen(req, timeout=60) as response:
-                    payload = response.read(30 * 1024 * 1024 + 1)
-                if len(payload) <= 30 * 1024 * 1024:
-                    data = payload
-                    break
-            except Exception:  # noqa: BLE001
-                if attempt == 0:
-                    time.sleep(0.4)
-        if not data:
-            continue
         try:
-            target.write_bytes(data)
-        except OSError:
+            path = _download_one(image, folder)
+        except OSError as exc:
+            _LAST_DOWNLOAD_ERRORS.append(str(exc))
             continue
-        if target.is_file() and target.stat().st_size > 0:
-            saved.append(target)
+        if path is not None:
+            saved.append(path)
+        time.sleep(0.12)
     return saved
-
-
 def find_images(
     query,
     limit: int = 4,
@@ -358,7 +465,14 @@ def find_images(
 
 
 def download_selected(images: list[dict], limit: int) -> list[Path]:
-    return _download_images(images, max(1, min(8, int(limit or 4))))
+    saved = _download_images(images, max(1, min(8, int(limit or 4))))
+    if not saved:
+        detail = "; ".join(_LAST_DOWNLOAD_ERRORS[-4:])
+        raise DerpiError(
+            "no downloadable derpicdn.net images were returned for the selected image IDs"
+            + (f" ({detail})" if detail else "")
+        )
+    return saved
 
 
 def search_download(
