@@ -15,7 +15,72 @@ import urllib.request
 from pathlib import Path
 
 ALLOWED_RATINGS = ("safe", "suggestive", "semi-grimdark")
-_RATING_SET = set(ALLOWED_RATINGS)
+_RATING_TAGS = {"safe", "suggestive", "semi-grimdark", "questionable", "explicit"}
+
+_KNOWN_TAGS = [
+    "twilight sparkle (alicorn)",
+    "twilight sparkle (unicorn)",
+    "twilight sparkle (human)",
+    "princess twilight sparkle",
+    "twilight sparkle",
+    "sunny starscout",
+    "rainbow dash",
+    "pinkie pie",
+    "applejack",
+    "fluttershy",
+    "princess celestia",
+    "princess luna",
+    "princess cadance",
+    "shining armor",
+    "sunset shimmer",
+    "starlight glimmer",
+    "queen chrysalis",
+    "king sombra",
+    "cozy glow",
+    "ms. peachbottom",
+    "what?",
+    "whoa!",
+    "o.o",
+    "my little pony",
+    "friendship is magic",
+    "alicorn",
+    "unicorn",
+    "earth pony",
+    "pegasus",
+    "g4",
+    "g5",
+    "equestria girls",
+]
+
+_CHINESE_TAGS = {
+    "天角暮光": "twilight sparkle (alicorn)",
+    "天角紫悦": "twilight sparkle (alicorn)",
+    "暮光闪闪": "twilight sparkle",
+    "暮光": "twilight sparkle",
+    "紫悦": "twilight sparkle",
+    "云宝": "rainbow dash",
+    "碧琪": "pinkie pie",
+    "苹果嘉儿": "applejack",
+    "苹果杰克": "applejack",
+    "珍奇": "rarity",
+    "柔柔": "fluttershy",
+    "小蝶": "fluttershy",
+    "天角兽": "alicorn",
+    "独角兽": "unicorn",
+    "飞马": "pegasus",
+}
+
+_FILLER = {
+    "帮我", "帮忙", "麻烦", "请", "给我", "我想要", "我想", "我要", "想要",
+    "找一下", "找几张", "找一张", "找", "搜一下", "搜索", "搜集", "收集", "搜",
+    "下载", "抓取", "获取", "下点", "来点", "来几张", "来一张", "来", "整点",
+    "看看", "查看", "查找", "最新的", "最新", "热门的", "热门", "好看的", "可爱的",
+    "图片", "图像", "插画", "壁纸", "照片", "的图片", "的图",
+    "几张", "一张", "一些", "一下", "谢谢", "多谢", "感谢",
+    "关于", "在", "里", "上", "中", "的", "呆站", "derpibooru", "derpi",
+    "latest", "newest", "please", "thanks", "thank", "find", "search", "download",
+    "get", "some", "picture", "pictures", "image", "images", "pics", "pic",
+}
 
 
 class DerpiError(Exception):
@@ -66,83 +131,126 @@ def _unique_output(folder: Path, stem: str, suffix: str) -> Path:
     return folder / f"{safe}_{int(time.time())}{suffix}"
 
 
-def extract_query(text: str) -> str:
-    """Turn a user/tool request into a clean Derpibooru tag query.
+def _clean_tag(tag: str) -> str:
+    tag = (tag or "").strip().strip(",;；")
+    tag = re.sub(r"\s+", " ", tag)
+    tag = tag.strip("，。；、")
+    if not tag or tag.lower() in _RATING_TAGS:
+        return ""
+    return tag
 
-    Handles both explicit `/derpi ...` commands and natural Chinese/English
-    requests such as:
-      "帮我在derpibooru里搜集最新的sunny starcout的图片，谢谢！"
-    """
+
+def extract_tags(text: str) -> list[str]:
     raw = (text or "").strip()
     raw = re.sub(r"^\s*/?(?:derpibooru|derpi)\b", " ", raw, flags=re.IGNORECASE)
-    # Keep only the part after a Derpibooru trigger when one is present.
     match = re.search(r"(?:derpibooru|derpi|呆站)", raw, flags=re.IGNORECASE)
     if match:
-        raw = raw[match.end() :]
-    # Strip request words, connectors and output nouns.  Longest tokens first
-    # so "搜集" is not partially reduced to "集" by the "搜" rule.
-    tokens = [
-        "derpibooru", "derpi", "呆站",
-        "帮我", "帮忙", "麻烦", "请", "给我", "我想要", "我想", "我要", "想要",
-        "找一下", "找几张", "找一张", "找", "搜一下", "搜索", "搜集", "收集", "搜",
-        "下载", "抓取", "获取", "来几张", "来一张", "看看", "查看", "查找",
-        "最新的", "最新", "热门的", "热门", "好看的", "可爱的",
-        "的图片", "的图", "图片", "图像", "插画", "壁纸", "照片",
-        "几张", "一张", "一些", "一下", "谢谢", "多谢", "感谢", "请",
-        "关于", "在", "里", "上", "中", "的",
-        "latest", "newest", "please", "thanks", "thank you",
-        "find", "search", "download", "get", "some", "pictures", "picture",
-        "images", "image", "pics", "pic",
-    ]
-    for token in tokens:
-        raw = re.sub(re.escape(token), " ", raw, flags=re.IGNORECASE)
-    raw = re.sub(r"[，。！？!?.,;；:：、]+", " ", raw)
-    raw = re.sub(r"\s+", " ", raw).strip(" \t\r\n")
-    if not raw:
-        return "twilight sparkle"
-    aliases = {
-        "sunny starcout": "sunny starscout",
-        "紫悦": "twilight sparkle",
-        "暮光闪闪": "twilight sparkle",
-        "暮光": "twilight sparkle",
-        "云宝": "rainbow dash",
-        "碧琪": "pinkie pie",
-        "苹果嘉儿": "applejack",
-        "苹果杰克": "applejack",
-        "珍奇": "rarity",
-        "柔柔": "fluttershy",
-        "小蝶": "fluttershy",
-    }
-    for chinese, english in aliases.items():
-        raw = raw.replace(chinese, english)
-    raw = re.sub(r"\s+", " ", raw).strip()
-    return raw or "twilight sparkle"
+        raw = raw[match.end():]
+    raw = raw.replace("（", "(").replace("）", ")")
+    raw = re.sub(r"^[\s:：,，、的里上中在]+", " ", raw)
+    # A trailing thank-you / sentence punctuation is not a tag separator.
+    raw = re.sub(
+        r"[，,。！？!?.;；]?\s*(?:谢谢|多谢|感谢|thanks?|please)\s*[！!。.]*\s*$",
+        " ",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    raw = raw.strip(" ,，。；:：")
+    raw = raw.replace("sunny starcout", "sunny starscout")
+
+    for chinese, english in _CHINESE_TAGS.items():
+        raw = raw.replace(chinese, f" {english} ")
+
+    # If explicit comma-separated tags are supplied, preserve those boundaries
+    # and all punctuation inside each tag.
+    tags: list[str] = []
+    if "," in raw or "，" in raw:
+        for piece in re.split(r"[,，]", raw):
+            cleaned = _clean_tag(piece)
+            if cleaned:
+                tags.append(cleaned)
+    else:
+        for filler in sorted(_FILLER, key=len, reverse=True):
+            if re.search(r"[\u3400-\u9fff]", filler):
+                raw = raw.replace(filler, " ")
+            else:
+                raw = re.sub(
+                    rf"(?<![\w]){re.escape(filler)}(?![\w])",
+                    " ",
+                    raw,
+                    flags=re.IGNORECASE,
+                )
+        raw = re.sub(r"\s+", " ", raw).strip(" ,，。.;；")
+        placeholders: list[str] = []
+        for known in sorted(_KNOWN_TAGS, key=len, reverse=True):
+            pattern = re.compile(re.escape(known), re.IGNORECASE)
+            while pattern.search(raw):
+                raw = pattern.sub(f" __KNOWN_{len(placeholders)}__ ", raw, count=1)
+                placeholders.append(known)
+        for token in raw.split():
+            if token.startswith("__KNOWN_"):
+                try:
+                    idx = int(token.strip("_").split("_")[-1])
+                    tags.append(placeholders[idx])
+                except (ValueError, IndexError):
+                    continue
+                continue
+            token = token.strip("，。；、,;")
+            if token and token.lower() not in _FILLER and token.lower() not in _RATING_TAGS:
+                tags.append(token)
+    result: list[str] = []
+    for tag in tags:
+        if tag not in result:
+            result.append(tag)
+    return result
+
+
+def extract_query(text: str) -> str:
+    tags = extract_tags(text)
+    return ", ".join(tags) if tags else "twilight sparkle"
+
+
+def is_request(text: str) -> bool:
+    raw = (text or "").strip()
+    if re.match(r"^/?(?:derpi|derpibooru)\b", raw, flags=re.IGNORECASE):
+        return True
+    lower = raw.lower()
+    if any(trigger in lower for trigger in ("derpibooru", "derpi", "呆站")):
+        return any(
+            verb in lower
+            for verb in (
+                "找", "搜", "下载", "抓取", "来", "给我", "下点", "收集",
+                "find", "search", "download",
+            )
+        )
+    return False
+
+
 def _is_allowed(image: dict) -> bool:
     tags = {str(tag).lower() for tag in image.get("tags") or []}
-    if not tags & _RATING_SET:
-        # Some API filters omit the rating tag; inspect the CDN filename too.
+    if not tags & set(ALLOWED_RATINGS):
         view_url = str(image.get("view_url") or "")
         if not any(f"__{rating}_" in view_url for rating in ALLOWED_RATINGS):
             return False
     return not ({"explicit", "questionable"} & tags)
 
 
-def is_request(text: str) -> bool:
-    raw = (text or "").strip()
-    if re.match(r"^/?(?:derpi|derpibooru)", raw, flags=re.IGNORECASE):
-        return True
-    lower = raw.lower()
-    if any(trigger in lower for trigger in ("derpibooru", "derpi", "呆站")):
-        return any(verb in lower for verb in ("找", "搜", "下载", "抓取", "来", "给我", "find", "search", "download"))
-    return False
-
-
-def search_download(query: str, limit: int = 4) -> list[Path]:
-    q = extract_query(query)
+def search_download(query, limit: int = 4) -> list[Path]:
+    raw_tags = query if isinstance(query, (list, tuple)) else extract_tags(str(query))
+    tags: list[str] = []
+    for tag in raw_tags:
+        cleaned = _clean_tag(str(tag))
+        if cleaned and cleaned not in tags:
+            tags.append(cleaned)
+    if not tags:
+        tags = ["twilight sparkle"]
     allowed = " OR ".join(ALLOWED_RATINGS)
+    # Derpibooru ANDs comma-separated tags. Parentheses, periods, ! and ?
+    # inside a tag are preserved; the rating group is a separate comma term.
+    q = ", ".join(tags) + f", ({allowed})"
     url = "https://derpibooru.org/api/v1/json/search/images?" + urllib.parse.urlencode(
         {
-            "q": f"({q}) AND ({allowed})",
+            "q": q,
             "per_page": max(1, min(limit, 8)),
             "sf": "created_at",
             "sd": "desc",
@@ -159,7 +267,7 @@ def search_download(query: str, limit: int = 4) -> list[Path]:
         raise DerpiError(f"Derpibooru search failed: {exc}") from exc
     images = payload.get("images") if isinstance(payload, dict) else None
     if not images:
-        raise DerpiError(f"Derpibooru returned no images for: {q}")
+        raise DerpiError(f"Derpibooru returned no images for tags: {q}")
     folder = save_dir()
     saved: list[Path] = []
     for image in images:
@@ -190,5 +298,5 @@ def search_download(query: str, limit: int = 4) -> list[Path]:
         if target.is_file() and target.stat().st_size > 0:
             saved.append(target)
     if not saved:
-        raise DerpiError(f"no downloadable derpicdn.net images were returned for: {q}")
+        raise DerpiError(f"no downloadable derpicdn.net images were returned for tags: {q}")
     return saved

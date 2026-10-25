@@ -31,6 +31,7 @@ def system_prompt(allow_file_tools: bool) -> str:
         '[[LOCAL_TOOL: {"tool":"derpi","query":"..."}]]',
         "可用工具：",
         '- derpi：按用户需求搜索 Derpibooru（safe / suggestive / semi-grimdark），并从 derpicdn.net 下载到用户的 Downloads 文件夹。参数：query（必填）、limit（可选，1-8）。',
+        '  query 必须使用逗号分隔的 Derpibooru 标签，标签内部的括号、英文句点、感叹号和问号必须原样保留；不要在 query 中加入 safe/suggestive/semi-grimdark 等评级词。示例："twilight sparkle (alicorn), alicorn"。',
     ]
     if allow_file_tools:
         lines += [

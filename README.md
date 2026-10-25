@@ -23,7 +23,7 @@ Twilight Harness 是一个 **Windows 10/11 x64** 桌面应用。它通过兼容 
 
 | 版本 | 主要定位 | 体积 |
 | --- | --- | --- |
-| **标准版** `twilight-harness.exe` | 纯聊天 + 双栏思考 + Markdown / 表格 | **26.75 MB** |
+| **标准版** `twilight-harness.exe` | 纯聊天 + 双栏思考 + Markdown / 表格 | **26.76 MB** |
 | **附件版** `twilight-harness-file.exe` | 标准版全部功能 + 附件 / OCR / 识图 / 视频 / 本地工具 / 旧 Office 兼容 | **91.16 MB** |
 
 > 标准版不显示附件入口；附件版是功能超集，两者共享同一套 UI、API 配置和运行时清理机制。
@@ -187,6 +187,13 @@ Ctrl + Enter 发送        Alt + Enter 添加附件
 - **附件版**：额外支持 Real-ESRGAN 超分、视频音频分离、视频转码。
 
 Derpibooru 搜索允许 **safe / suggestive / semi-grimdark** 三个评级，对应标准 default filter，不使用 safe-only 过滤。
+
+查询遵循 Derpibooru 的 tag 规则：
+
+- 多个 tag 使用英文逗号连接，表示 AND 叠加；
+- tag 内部的英文括号、英文句点、感叹号、问号原样保留；
+- 示例：`twilight sparkle (alicorn), alicorn`、`ms. peachbottom, what?`；
+- 评级词由程序统一处理，无需写入 query。
 
 | 命令 | 需要附件 | 输出 |
 | --- | --- | --- |
@@ -436,7 +443,9 @@ twilight-harness-file/     本地构建的附件版产物
 - 附件引用 `×` 撤销与发送时过滤；
 - 思考端、输出端 Markdown / 表格渲染；
 - 视频 12–72 帧抽帧、联系表、帧 OCR 和多模态请求；
-- Derpibooru 搜索（safe / suggestive / semi-grimdark）与 derpicdn.net 下载；
+- Derpibooru 搜索（safe / suggestive / semi-grimdark）、逗号 tag 叠加与 derpicdn.net 下载；
+- 截图中 `sunny starcout` 类拼写会规范为 `sunny starscout`；
+- 模型 API 工具调用本地 Derpibooru / Real-ESRGAN / 音频分离 / 视频转码；
 - Real-ESRGAN 超分、ffmpeg 音频分离与转码；
 - Real-ESRGAN 图片超分；
 - ffmpeg 音频分离和视频转码；
