@@ -23,6 +23,7 @@ import api_client
 import derpi
 import feature_flags
 import local_tools
+import progress_window
 import persona
 import theme
 import ui_strings
@@ -186,6 +187,9 @@ class TwilightApp:
         self._load_images()
         self._configure_window()
         self._build_shell()
+        self._progress_window = progress_window.ProgressWindow(
+            self.root, lambda key: self._s.get(key, key)
+        )
         self._show_setup()
         self._queue_job = self.root.after(40, self._drain_queue)
         self.root.report_callback_exception = self._report_callback_exception
@@ -389,6 +393,10 @@ class TwilightApp:
                 except tk.TclError:
                     pass
                 setattr(self, attr, None)
+        try:
+            self._progress_window.shutdown()
+        except Exception:  # noqa: BLE001
+            pass
         api_client.cleanup_character(self.home)
         try:
             self.root.destroy()
@@ -1435,7 +1443,7 @@ class TwilightApp:
                 images = derpi.find_images(query, 10)
                 ids = [str(item.get("id")) for item in images if item.get("id")]
                 self._queue.put(("tool_progress", "derpi", ids))
-                paths = derpi.download_selected(images, 10)
+                paths = derpi.download_selected(images, 10, progress=self._report_progress)
                 if not paths:
                     raise derpi.DerpiError(
                         "no downloadable derpicdn.net images were returned for the selected image IDs"
@@ -1469,7 +1477,7 @@ class TwilightApp:
 
         def work() -> None:
             try:
-                paths = local_actions.run(request)
+                paths = local_actions.run(request, progress=self._report_progress)
             except Exception as exc:  # noqa: BLE001
                 api_client.LOGGER.exception("Local action failed")
                 self._queue.put(("local_error", str(exc)))
@@ -1737,6 +1745,7 @@ class TwilightApp:
                         on_progress=lambda tool, ids: self._queue.put(
                             ("tool_progress", tool, ids)
                         ),
+                        task_progress=self._report_progress,
                     )
                 except Exception as exc:  # noqa: BLE001
                     api_client.LOGGER.exception("Local tool execution failed")
@@ -1748,6 +1757,12 @@ class TwilightApp:
         self._sending = False
         self._set_chat_status("ready")
         self._focus_composer()
+
+    def _report_progress(self, event: dict) -> None:
+        try:
+            self._progress_window.report(event)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _format_result_paths(self, paths: list[str]) -> str:
         if len(paths) <= 60:

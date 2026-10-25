@@ -151,6 +151,7 @@ def main() -> int:
         APP / "main.py",
         APP / "app.py",
         APP / "widgets.py",
+        APP / "progress_window.py",
         APP / "api_client.py",
         APP / "persona.py",
         APP / "theme.py",

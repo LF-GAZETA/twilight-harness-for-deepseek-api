@@ -115,6 +115,7 @@ def execute_calls(
     attachments: list,
     allow_file_tools: bool,
     on_progress=None,
+    task_progress=None,
 ) -> list[ToolOutcome]:
     outcomes: list[ToolOutcome] = []
     for call in calls[:3]:
@@ -142,7 +143,7 @@ def execute_calls(
                         on_progress("derpi", ids)
                     except Exception:  # noqa: BLE001
                         pass
-                paths = derpi.download_selected(selected, max(1, min(derpi.MAX_IMAGE_DOWNLOADS, limit)))
+                paths = derpi.download_selected(selected, max(1, min(derpi.MAX_IMAGE_DOWNLOADS, limit)), progress=task_progress)
                 if not paths:
                     raise derpi.DerpiError(
                         "no downloadable derpicdn.net images were returned for the selected image IDs"
@@ -160,12 +161,12 @@ def execute_calls(
                 image = _find_attachment(attachments, "image")
                 if image is None:
                     raise local_actions.LocalActionError("please attach an image first")
-                paths = local_actions._upscale(Path(image.path))
+                paths = local_actions._upscale(Path(image.path), progress=task_progress)
             elif tool == "video_upscale":
                 video = _find_attachment(attachments, "video")
                 if video is None:
                     raise local_actions.LocalActionError("please attach a video first")
-                paths = local_actions._video_upscale(Path(video.path))
+                paths = local_actions._video_upscale(Path(video.path), progress=task_progress)
             elif tool == "audio":
                 video = _find_attachment(attachments, "video")
                 if video is None:

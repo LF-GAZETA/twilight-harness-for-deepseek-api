@@ -23,8 +23,8 @@ Twilight Harness 是一个 **Windows 10/11 x64** 桌面应用。它通过兼容 
 
 | 版本 | 主要定位 | 体积 |
 | --- | --- | --- |
-| **标准版** `twilight-harness.exe` | 纯聊天 + 双栏思考 + Markdown / 表格 | **27.28 MB** |
-| **附件版** `twilight-harness-file.exe` | 标准版全部功能 + 附件 / OCR / 识图 / 视频 / 本地工具 / 旧 Office 兼容 | **91.46 MB** |
+| **标准版** `twilight-harness.exe` | 纯聊天 + 双栏思考 + Markdown / 表格 | **27.31 MB** |
+| **附件版** `twilight-harness-file.exe` | 标准版全部功能 + 附件 / OCR / 识图 / 视频 / 本地工具 / 旧 Office 兼容 | **91.49 MB** |
 
 > 标准版不显示附件入口；附件版是功能超集，两者共享同一套 UI、API 配置和运行时清理机制。
 
@@ -63,6 +63,7 @@ Twilight Harness 是一个 **Windows 10/11 x64** 桌面应用。它通过兼容 
 | “压片”极限压缩（240p / 42kbps / 14kbps） | — | ✅ |
 | Real-ESRGAN 超分辨率 | — | ✅ |
 | Derpibooru 图片下载 | ✅ | ✅ |
+| 下载 / Real-ESRGAN 浮动进度窗口 | ✅ | ✅ |
 | 本地 20,000 Derpibooru tag 表 | ✅ | ✅ |
 | `.doc/.ppt/.xls` 临时转换 | — | ✅ |
 | 关闭清理 `fonts/`、`temp/`、`data/`、`log/` | ✅ | ✅ |
@@ -270,6 +271,17 @@ Derpibooru 搜索允许 **safe / suggestive / semi-grimdark** 三个评级，对
 该目录只在下载时写入，应用关闭清理不会触碰 Downloads。
 
 如果 `Downloads\TwilightHarness` 因 ACL、杀毒软件或 Windows 受控文件夹访问而不可写，程序会依次尝试 `Downloads\TwilightHarness-2`、Downloads 根目录、`Pictures\TwilightHarness`、`%LOCALAPPDATA%\TwilightHarness\downloads`、EXE 目录下的 `downloads` 和系统 TEMP，并在结果中显示实际路径，不会删除任何目录。
+
+### 本地任务进度窗口
+
+开始 Derpibooru 下载或 Real-ESRGAN 超分时，会自动打开一个浮动进度窗口：
+
+- 初始大小 **400×350**，位于屏幕左下角；
+- 可拖动缩放、最大化、最小化；
+- 每张 Derpibooru 图片有独立进度条，显示文件名、已下载字节 / 总字节；
+- 图片 Real-ESRGAN 超分显示 `Real-ESRGAN: <文件名>` 进度条；
+- 视频逐帧超分显示 `Real-ESRGAN: <文件名>` 和 `ffmpeg: <文件名>` 两条进度；
+- 任务很多时最多保留最近 80 行，避免界面卡顿。
 
 ### 本地 Derpibooru tag 表
 

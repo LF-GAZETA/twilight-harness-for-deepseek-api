@@ -102,8 +102,26 @@ def _real_esrgan_dir() -> Path:
     return directory
 
 
-def _upscale(image: Path) -> list[Path]:
+def _emit_progress(progress, row_id: str, kind: str, name: str,
+                   fraction: float, state: str = "running") -> None:
+    if progress is None:
+        return
+    try:
+        progress({
+            "id": row_id,
+            "kind": kind,
+            "name": name,
+            "fraction": max(0.0, min(1.0, fraction)),
+            "state": state,
+        })
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _upscale(image: Path, progress=None) -> list[Path]:
     tool = _real_esrgan_dir()
+    row_id = f"realesrgan-{image.stem}"
+    _emit_progress(progress, row_id, "realesrgan", image.stem, 0.05)
     output = _unique_output(_save_dir(), f"{image.stem}_realesrgan_x4", ".png")
     commands = [
         [
@@ -149,8 +167,10 @@ def _upscale(image: Path) -> list[Path]:
             errors.append(str(exc))
             continue
         if result.returncode == 0 and output.is_file() and output.stat().st_size > 0:
+            _emit_progress(progress, row_id, "realesrgan", image.stem, 1.0, "done")
             return [output]
         errors.append(result.stderr.decode("utf-8", errors="replace")[-500:])
+    _emit_progress(progress, row_id, "realesrgan", image.stem, 0.0, "error")
     raise LocalActionError("Real-ESRGAN failed: " + (" | ".join(errors[-2:])))
 
 
@@ -177,11 +197,15 @@ def _video_fps(video: Path) -> float:
     return 30.0
 
 
-def _video_upscale(video: Path) -> list[Path]:
+def _video_upscale(video: Path, progress=None) -> list[Path]:
     """Upscale every video frame with Real-ESRGAN, then restore the audio."""
     tool = _real_esrgan_dir()
     ffmpeg = _ffmpeg()
     fps = _video_fps(video)
+    esrgan_row = f"realesrgan-{video.stem}"
+    ffmpeg_row = f"ffmpeg-{video.stem}"
+    _emit_progress(progress, esrgan_row, "realesrgan", video.stem, 0.0)
+    _emit_progress(progress, ffmpeg_row, "ffmpeg", video.stem, 0.0)
     output = _unique_output(_save_dir(), f"{video.stem}_realesrgan_x4", ".mp4")
     with tempfile.TemporaryDirectory(prefix=".twilight-video-esrgan-", dir=str(_save_dir())) as directory:
         root = Path(directory)
@@ -213,6 +237,7 @@ def _video_upscale(video: Path) -> list[Path]:
         except Exception as exc:  # noqa: BLE001
             raise LocalActionError(f"video frame extraction failed: {exc}") from exc
         frames = sorted(input_dir.glob("*.png"))
+        _emit_progress(progress, ffmpeg_row, "ffmpeg", video.stem, 0.25)
         if result.returncode != 0 or not frames:
             raise LocalActionError(
                 "video frame extraction failed: "
@@ -265,7 +290,11 @@ def _video_upscale(video: Path) -> list[Path]:
                 break
             errors.append(result.stderr.decode("utf-8", errors="replace")[-500:])
         else:
+            _emit_progress(progress, esrgan_row, "realesrgan", video.stem, 0.0, "error")
+            _emit_progress(progress, ffmpeg_row, "ffmpeg", video.stem, 0.0, "error")
             raise LocalActionError("Real-ESRGAN video frames failed: " + " | ".join(errors[-2:]))
+        _emit_progress(progress, esrgan_row, "realesrgan", video.stem, 1.0, "done")
+        _emit_progress(progress, ffmpeg_row, "ffmpeg", video.stem, 0.65)
         encode_command = [
             ffmpeg,
             "-hide_banner",
@@ -309,10 +338,12 @@ def _video_upscale(video: Path) -> list[Path]:
         except Exception as exc:  # noqa: BLE001
             raise LocalActionError(f"video encode failed: {exc}") from exc
         if result.returncode != 0 or not output.is_file() or output.stat().st_size == 0:
+            _emit_progress(progress, ffmpeg_row, "ffmpeg", video.stem, 0.0, "error")
             raise LocalActionError(
                 "video encode failed: "
                 + result.stderr.decode("utf-8", errors="replace")[-500:]
             )
+        _emit_progress(progress, ffmpeg_row, "ffmpeg", video.stem, 1.0, "done")
     return [output]
 
 
@@ -540,19 +571,19 @@ def parse_request(text: str, items: list[attachments.Attachment]) -> LocalReques
     return None
 
 
-def run(request: LocalRequest) -> list[Path]:
+def run(request: LocalRequest, progress=None) -> list[Path]:
     if request.error == "image":
         raise LocalActionError("please attach an image first")
     if request.error == "video":
         raise LocalActionError("please attach a video first")
     if request.kind == "derpi":
-        return derpi.search_download(request.query)
+        return derpi.search_download(request.query, progress=progress)
     if request.attachment is None:
         raise LocalActionError("missing attachment")
     if request.kind == "upscale":
-        return _upscale(request.attachment.path)
+        return _upscale(request.attachment.path, progress=progress)
     if request.kind == "video_upscale":
-        return _video_upscale(request.attachment.path)
+        return _video_upscale(request.attachment.path, progress=progress)
     if request.kind == "audio":
         return _extract_audio(request.attachment.path)
     if request.kind == "transcode":

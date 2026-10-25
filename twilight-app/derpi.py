@@ -516,11 +516,33 @@ def _curl_download(url: str, target: Path) -> tuple[bool, str]:
     return False, f"curl HTTP {result.returncode}: {detail}"
 
 
-def _download_one(image: dict, folder: Path) -> Path | None:
+def _emit_progress(progress, event: dict) -> None:
+    if progress is None:
+        return
+    try:
+        progress(event)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _download_one(image: dict, folder: Path, progress=None) -> Path | None:
     image_id = str(image.get("id") or int(time.time() * 1000))
+    row_id = f"download-{image_id}"
+    label = f"derpibooru-{image_id}"
+    total_hint = int(image.get("size") or 0)
+    _emit_progress(
+        progress,
+        {"id": row_id, "kind": "download", "name": label,
+         "fraction": 0.0, "done": 0, "total": total_hint, "state": "running"},
+    )
     urls = _safe_image_urls(image)
     if not urls:
         _LAST_DOWNLOAD_ERRORS.append(f"{image_id}: no derpicdn.net URL")
+        _emit_progress(
+            progress,
+            {"id": row_id, "kind": "download", "name": label,
+             "fraction": 0.0, "done": 0, "total": total_hint, "state": "error"},
+        )
         return None
     suffix = Path(urllib.parse.urlparse(urls[0]).path).suffix.lower()
     fmt = str(image.get("format") or "").lower()
@@ -541,18 +563,60 @@ def _download_one(image: dict, folder: Path) -> Path | None:
             try:
                 request = urllib.request.Request(url, headers=headers)
                 with urllib.request.urlopen(request, timeout=60) as response:
-                    payload = response.read(30 * 1024 * 1024 + 1)
+                    total = int(
+                        response.headers.get("Content-Length")
+                        or total_hint
+                        or 0
+                    )
+                    chunks: list[bytes] = []
+                    done = 0
+                    while True:
+                        chunk = response.read(64 * 1024)
+                        if not chunk:
+                            break
+                        done += len(chunk)
+                        if done > 30 * 1024 * 1024:
+                            break
+                        chunks.append(chunk)
+                        fraction = (done / total) if total > 0 else 0.0
+                        _emit_progress(
+                            progress,
+                            {"id": row_id, "kind": "download", "name": label,
+                             "fraction": min(0.99, fraction), "done": done,
+                             "total": total, "state": "running"},
+                        )
+                    payload = b"".join(chunks)
                 if 0 < len(payload) <= 30 * 1024 * 1024:
                     part.write_bytes(payload)
                     part.replace(target)
+                    _emit_progress(
+                        progress,
+                        {"id": row_id, "kind": "download", "name": label,
+                         "fraction": 1.0, "done": len(payload),
+                         "total": len(payload), "state": "done"},
+                    )
                     return target
                 last_error = f"HTTP body size {len(payload)}"
             except Exception as exc:  # noqa: BLE001
                 last_error = f"{type(exc).__name__}: {exc}"
             if attempt == 0:
                 time.sleep(0.4)
+        _emit_progress(
+            progress,
+            {"id": row_id, "kind": "download", "name": label,
+             "fraction": 0.25, "done": 0, "total": total_hint, "state": "running"},
+        )
         ok, curl_error = _curl_download(url, target)
         if ok:
+            try:
+                size = target.stat().st_size
+            except OSError:
+                size = 0
+            _emit_progress(
+                progress,
+                {"id": row_id, "kind": "download", "name": label,
+                 "fraction": 1.0, "done": size, "total": size, "state": "done"},
+            )
             return target
         last_error = curl_error or last_error
         try:
@@ -560,13 +624,18 @@ def _download_one(image: dict, folder: Path) -> Path | None:
         except OSError:
             pass
     _LAST_DOWNLOAD_ERRORS.append(f"{image_id}: {last_error or 'download failed'}")
+    _emit_progress(
+        progress,
+        {"id": row_id, "kind": "download", "name": label,
+         "fraction": 0.0, "done": 0, "total": total_hint, "state": "error"},
+    )
     return None
 
 
 _LAST_DOWNLOAD_ERRORS: list[str] = []
 
 
-def _download_images(images: list[dict], limit: int) -> list[Path]:
+def _download_images(images: list[dict], limit: int, progress=None) -> list[Path]:
     _LAST_DOWNLOAD_ERRORS.clear()
     folder = save_dir()
     _probe_writable(folder)
@@ -576,7 +645,7 @@ def _download_images(images: list[dict], limit: int) -> list[Path]:
         return saved
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
         pending = {
-            executor.submit(_download_one, image, folder): image
+            executor.submit(_download_one, image, folder, progress): image
             for image in selected
         }
         for future in concurrent.futures.as_completed(pending):
@@ -589,8 +658,8 @@ def _download_images(images: list[dict], limit: int) -> list[Path]:
                 saved.append(path)
     return saved
 
-def download_selected(images: list[dict], limit: int) -> list[Path]:
-    saved = _download_images(images, max(1, min(MAX_IMAGE_DOWNLOADS, int(limit or 10))))
+def download_selected(images: list[dict], limit: int, progress=None) -> list[Path]:
+    saved = _download_images(images, max(1, min(MAX_IMAGE_DOWNLOADS, int(limit or 10))), progress)
     if not saved:
         detail = "; ".join(_LAST_DOWNLOAD_ERRORS[-4:])
         raise DerpiError(
@@ -605,10 +674,11 @@ def search_download(
     limit: int = 10,
     after: str | None = None,
     before: str | None = None,
+    progress=None,
 ) -> list[Path]:
     """Backward-compatible convenience wrapper: select and download."""
     images = find_images(query, limit=limit, after=after, before=before)
-    saved = download_selected(images, max(1, min(MAX_IMAGE_DOWNLOADS, int(limit or 10))))
+    saved = download_selected(images, max(1, min(MAX_IMAGE_DOWNLOADS, int(limit or 10))), progress)
     if not saved:
         raise DerpiError("no downloadable derpicdn.net images were returned for the selected image IDs")
     return saved
