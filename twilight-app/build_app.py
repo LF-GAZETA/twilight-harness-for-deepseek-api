@@ -136,6 +136,10 @@ def main() -> int:
         APP / "paths.py",
         APP / "font_manager.py",
         APP / "ui_strings.py",
+        APP / "markdown_tables.py",
+        APP / "derpi.py",
+        APP / "local_tools.py",
+        APP / "feature_flags.py",
     ]
     for module in modules:
         if not module.is_file():

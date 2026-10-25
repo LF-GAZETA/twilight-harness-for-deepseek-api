@@ -20,7 +20,9 @@ import tkinter as tk
 from tkinter import filedialog
 
 import api_client
+import derpi
 import feature_flags
+import local_tools
 import persona
 import theme
 import ui_strings
@@ -176,6 +178,7 @@ class TwilightApp:
         self._right_text = None
         self._attach_hint = None
         self._pending_attachments: list = []
+        self._last_sent_attachments: list = []
         self._topbar = None
         self._resizer = None
 
@@ -1394,6 +1397,31 @@ class TwilightApp:
     # ------------------------------------------------------------------
     # Sending / streaming
     # ------------------------------------------------------------------
+    def _start_derpi_request(self, content: str) -> None:
+        s = self._s
+        display = content
+        for item in self._pending_attachments:
+            display = display.replace(f"{item.name} ×", item.name)
+        display = display.strip()
+        query = derpi.extract_query(content)
+        self._sending = True
+        self._composer.clear()
+        self._pending_attachments.clear()
+        self._set_chat_status("thinking")
+        self._append_user_turn(display)
+        self._append_right_text("\n" + s["local_working"] + "\n", "sys_notice")
+
+        def work() -> None:
+            try:
+                paths = derpi.search_download(query, 4)
+            except Exception as exc:  # noqa: BLE001
+                api_client.LOGGER.exception("Derpibooru download failed")
+                self._queue.put(("local_error", str(exc)))
+                return
+            self._queue.put(("local_done", "derpi", [str(path) for path in paths]))
+
+        threading.Thread(target=work, name="twilight-derpi", daemon=True).start()
+
     def _start_local_request(self, request, content: str) -> None:
         s = self._s
         if request.error == "image":
@@ -1462,6 +1490,9 @@ class TwilightApp:
         content = self._composer.get_value().strip()
         if not content and not self._pending_attachments:
             return
+        if derpi.is_request(content):
+            self._start_derpi_request(content)
+            return
         if (
             feature_flags.ATTACHMENTS_ENABLED
             and local_actions is not None
@@ -1493,6 +1524,7 @@ class TwilightApp:
                 + content
             )
         self._sending = True
+        self._last_sent_attachments = list(self._pending_attachments)
         self._current_reasoning = ""
         self._current_content = ""
         self._vision_fallback_notice = False
@@ -1506,6 +1538,7 @@ class TwilightApp:
         self._history.append({"role": "user", "content": api_content})
         self._trim_history()
         system_prompt = persona.build_system_prompt(self._profile, self._language_label)
+        system_prompt += "\n\n" + local_tools.system_prompt(feature_flags.ATTACHMENTS_ENABLED)
         text_messages = [{"role": "system", "content": system_prompt}] + list(self._history)
         messages = text_messages
         if image_items and attachments is not None:
@@ -1600,6 +1633,7 @@ class TwilightApp:
     def _handle_assistant_done(self, reply: api_client.ChatReply) -> None:
         if self._closed or self._mode != "chat" or not self._sending:
             return
+        clean_content, tool_calls = local_tools.extract_calls(reply.content)
         if self._right_text is not None:
             at_end = self._near_bottom(self._right_text)
             self._set_normal(self._right_text)
@@ -1610,7 +1644,7 @@ class TwilightApp:
                     pass
             widgets.insert_markdown(
                 self._right_text,
-                reply.content.strip(),
+                clean_content.strip(),
                 base_tag="body",
                 bold_tag="md_bold",
                 italic_tag="md_italic",
@@ -1658,12 +1692,55 @@ class TwilightApp:
         if self._vision_fallback_notice:
             self._append_think(self._s["vision_fallback"] + "\n", "muted")
             self._vision_fallback_notice = False
-        self._history.append({"role": "assistant", "content": reply.content})
+        self._history.append({"role": "assistant", "content": clean_content})
         self._trim_history()
-        self._sending = False
         self._effective_model = reply.model
-        self._set_chat_status("ready")
         self._current_answer_avatar = None
+        if tool_calls:
+            self._set_chat_status("thinking")
+            self._append_right_text("\n" + self._s["local_working"] + "\n", "sys_notice")
+            attachments_for_tools = list(self._last_sent_attachments)
+
+            def run_tools() -> None:
+                try:
+                    outcomes = local_tools.execute_calls(
+                        tool_calls,
+                        attachments_for_tools,
+                        feature_flags.ATTACHMENTS_ENABLED,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    api_client.LOGGER.exception("Local tool execution failed")
+                    outcomes = [local_tools.ToolOutcome(tool="local", error=str(exc))]
+                self._queue.put(("tools_done", outcomes))
+
+            threading.Thread(target=run_tools, name="twilight-local-tools", daemon=True).start()
+            return
+        self._sending = False
+        self._set_chat_status("ready")
+        self._focus_composer()
+
+    def _handle_tools_done(self, outcomes) -> None:
+        if self._closed:
+            return
+        s = self._s
+        key_by_tool = {
+            "derpi": "local_derpi_done",
+            "upscale": "local_upscale_done",
+            "audio": "local_audio_done",
+            "transcode": "local_transcode_done",
+        }
+        for outcome in outcomes:
+            if outcome.error:
+                self._append_right_text(
+                    "\n" + s["local_failed"] + outcome.error + "\n",
+                    "sys_error",
+                )
+                continue
+            key = key_by_tool.get(outcome.tool, "local_derpi_done")
+            message = s[key] + "\n" + "\n".join(outcome.paths)
+            self._append_right_text("\n" + message + "\n", "sys_notice")
+        self._sending = False
+        self._set_chat_status("ready")
         self._focus_composer()
 
     def _handle_chat_error(self, status: int | None, message: str) -> None:
@@ -1759,6 +1836,9 @@ class TwilightApp:
             elif kind == "local_error":
                 _, local_message = events[index]
                 self._handle_local_error(local_message)
+            elif kind == "tools_done":
+                _, outcomes = events[index]
+                self._handle_tools_done(outcomes)
             index += 1
         if not self._closed:
             try:

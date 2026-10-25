@@ -19,12 +19,11 @@ import shutil
 import subprocess
 import sys
 import time
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import attachments
+import derpi
 
 
 class LocalActionError(Exception):
@@ -38,6 +37,7 @@ class LocalRequest:
     attachment: attachments.Attachment | None = None
     query: str = ""
     target_format: str = "mp4"
+    params: dict = field(default_factory=dict)
     error: str = ""
     images: list[str] = field(default_factory=list)
 
@@ -48,28 +48,7 @@ def _creation_flags() -> int:
 
 def downloads_dir() -> Path:
     """Resolve the user's Downloads known folder; never delete it."""
-    candidate: Path | None = None
-    if os.name == "nt":
-        try:
-            import winreg
-
-            key = winreg.OpenKey(
-                winreg.HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders",
-            )
-            value, _ = winreg.QueryValueEx(
-                key, "{374DE290-123F-4565-9164-39C4925E467B}"
-            )
-            candidate = Path(os.path.expandvars(value))
-        except Exception:  # noqa: BLE001
-            candidate = None
-    if candidate is None:
-        candidate = Path.home() / "Downloads"
-    try:
-        candidate.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        raise LocalActionError(f"cannot access Downloads folder: {exc}") from exc
-    return candidate
+    return derpi.downloads_dir()
 
 
 def _tool_dir(name: str) -> Path | None:
@@ -103,9 +82,7 @@ def _unique_output(folder: Path, stem: str, suffix: str) -> Path:
 
 
 def _save_dir() -> Path:
-    folder = downloads_dir() / "TwilightHarness"
-    folder.mkdir(parents=True, exist_ok=True)
-    return folder
+    return derpi.save_dir()
 
 
 def _ffmpeg() -> str:
@@ -113,83 +90,6 @@ def _ffmpeg() -> str:
     if not executable:
         raise LocalActionError("ffmpeg is not available")
     return executable
-
-
-def _derpi_query(query: str) -> str:
-    query = re.sub(r"\s+", " ", (query or "").strip())
-    mapping = {
-        "紫悦": "twilight sparkle",
-        "暮光闪闪": "twilight sparkle",
-        "暮光": "twilight sparkle",
-        "云宝": "rainbow dash",
-        "碧琪": "pinkie pie",
-        "苹果嘉儿": "applejack",
-        "苹果杰克": "applejack",
-        "珍奇": "rarity",
-        "柔柔": "fluttershy",
-        "小蝶": "fluttershy",
-    }
-    for chinese, english in mapping.items():
-        query = query.replace(chinese, english)
-    return query or "twilight sparkle"
-
-
-def _download_derpi(query: str, limit: int = 4) -> list[Path]:
-    q = _derpi_query(query)
-    query_string = q if "safe" in q.lower().split() else f"{q} AND safe"
-    url = "https://derpibooru.org/api/v1/json/search/images?" + urllib.parse.urlencode(
-        {
-            "q": query_string,
-            "per_page": max(1, min(limit, 8)),
-            "sf": "created_at",
-            "sd": "desc",
-        }
-    )
-    request = urllib.request.Request(
-        url,
-        headers={"User-Agent": "TwilightHarness/1.0 (fan project; local desktop client)"},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            payload = json.loads(response.read().decode("utf-8", errors="replace"))
-    except Exception as exc:  # noqa: BLE001
-        raise LocalActionError(f"Derpibooru search failed: {exc}") from exc
-    images = payload.get("images") if isinstance(payload, dict) else None
-    if not images:
-        raise LocalActionError("Derpibooru returned no safe images")
-    folder = _save_dir()
-    saved: list[Path] = []
-    for image in images:
-        if len(saved) >= limit:
-            break
-        view_url = str(image.get("view_url") or image.get("image") or "")
-        parsed = urllib.parse.urlparse(view_url)
-        if parsed.scheme != "https" or not (
-            parsed.netloc == "derpicdn.net" or parsed.netloc.endswith(".derpicdn.net")
-        ):
-            continue
-        suffix = Path(parsed.path).suffix.lower()
-        if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
-            suffix = ".png"
-        image_id = str(image.get("id") or int(time.time() * 1000))
-        target = _unique_output(folder, f"derpibooru_{image_id}", suffix)
-        try:
-            req = urllib.request.Request(
-                view_url,
-                headers={"User-Agent": "TwilightHarness/1.0"},
-            )
-            with urllib.request.urlopen(req, timeout=60) as response:
-                data = response.read(30 * 1024 * 1024 + 1)
-            if len(data) > 30 * 1024 * 1024:
-                continue
-            target.write_bytes(data)
-        except Exception:  # noqa: BLE001
-            continue
-        if target.is_file() and target.stat().st_size > 0:
-            saved.append(target)
-    if not saved:
-        raise LocalActionError("no downloadable derpicdn.net images were returned")
-    return saved
 
 
 def _real_esrgan_dir() -> Path:
@@ -287,21 +187,66 @@ def _extract_audio(video: Path) -> list[Path]:
     return [output]
 
 
-def _transcode(video: Path, target_format: str) -> list[Path]:
+def _transcode(video: Path, target_format: str, params: dict | None = None) -> list[Path]:
+    params = params or {}
     fmt = (target_format or "mp4").lower().lstrip(".")
     if fmt not in {"mp4", "webm", "mkv", "mov", "gif"}:
         raise LocalActionError("unsupported transcode format: " + fmt)
     output = _unique_output(_save_dir(), f"{video.stem}_transcoded", "." + fmt)
-    if fmt == "mp4":
-        codec = ["-c:v", "libx264", "-preset", "medium", "-crf", "23", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart"]
-    elif fmt == "webm":
-        codec = ["-c:v", "libvpx-vp9", "-crf", "32", "-b:v", "0", "-c:a", "libopus", "-b:a", "128k"]
-    elif fmt == "mkv":
-        codec = ["-c", "copy"]
-    elif fmt == "mov":
-        codec = ["-c:v", "libx264", "-preset", "medium", "-crf", "23", "-c:a", "aac", "-b:a", "192k"]
+    video_bitrate = str(params.get("video_bitrate") or params.get("vbitrate") or "").strip()
+    audio_bitrate = str(params.get("audio_bitrate") or params.get("abitrate") or "").strip()
+    resolution = str(params.get("resolution") or "").strip()
+    fps = str(params.get("fps") or "").strip()
+    vf_parts: list[str] = []
+    if resolution:
+        lower_res = resolution.lower()
+        if lower_res.endswith("p") and lower_res[:-1].isdigit():
+            vf_parts.append(f"scale=-2:{lower_res[:-1]}")
+        elif "x" in lower_res:
+            width, height = lower_res.split("x", 1)
+            if width.isdigit() and height.isdigit():
+                vf_parts.append(f"scale={width}:{height}")
+    if fps:
+        try:
+            fps_value = float(fps)
+            if 1 <= fps_value <= 120:
+                vf_parts.append(f"fps={fps_value:g}")
+        except ValueError:
+            pass
+    if fmt == "gif":
+        if not fps:
+            vf_parts.append("fps=12")
+        if not resolution:
+            vf_parts.append("scale='min(960,iw)':-1:flags=lanczos")
+        vf_parts.append("split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse")
+        codec = ["-vf", ",".join(vf_parts), "-loop", "0"]
     else:
-        codec = ["-vf", "fps=12,scale='min(960,iw)':-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse", "-loop", "0"]
+        codec = []
+        if fmt == "mp4":
+            codec += ["-c:v", "libx264", "-preset", "medium"]
+            if video_bitrate:
+                codec += ["-b:v", video_bitrate]
+            else:
+                codec += ["-crf", "23"]
+            codec += ["-c:a", "aac", "-b:a", audio_bitrate or "192k", "-movflags", "+faststart"]
+        elif fmt == "webm":
+            codec += ["-c:v", "libvpx-vp9"]
+            if video_bitrate:
+                codec += ["-b:v", video_bitrate]
+            else:
+                codec += ["-crf", "32", "-b:v", "0"]
+            codec += ["-c:a", "libopus", "-b:a", audio_bitrate or "128k"]
+        elif fmt == "mkv":
+            codec += ["-c", "copy"]
+        elif fmt == "mov":
+            codec += ["-c:v", "libx264", "-preset", "medium"]
+            if video_bitrate:
+                codec += ["-b:v", video_bitrate]
+            else:
+                codec += ["-crf", "23"]
+            codec += ["-c:a", "aac", "-b:a", audio_bitrate or "192k"]
+        if vf_parts:
+            codec = ["-vf", ",".join(vf_parts)] + codec
     command = ["-hide_banner", "-loglevel", "error", "-y", "-i", str(video), *codec, str(output)]
     try:
         result = subprocess.run(
@@ -334,6 +279,26 @@ def _first_video(items: list[attachments.Attachment]) -> attachments.Attachment 
     return None
 
 
+def parse_transcode_params(text: str) -> dict:
+    lower = text.lower()
+    params: dict = {}
+    bitrate = re.search(r"(?:视频码率|video[_-]?bitrate|vbitrate|vbr|\b码率)\s*[=:：]?\s*([0-9.]+\s*[kKmMgG]?)", lower)
+    if bitrate:
+        params["video_bitrate"] = bitrate.group(1).replace(" ", "").upper()
+    audio = re.search(r"(?:音频码率|audio[_-]?bitrate|abitrate|abr)\s*[=:：]?\s*([0-9.]+\s*[kKmMgG]?)", lower)
+    if audio:
+        params["audio_bitrate"] = audio.group(1).replace(" ", "").upper()
+    resolution = re.search(r"(?:分辨率|resolution)\s*[=:：]?\s*([0-9]{3,4}p|[0-9]{3,5}x[0-9]{3,5})", lower)
+    if not resolution:
+        resolution = re.search(r"\b([0-9]{3,4}p|[0-9]{3,5}x[0-9]{3,5})\b", lower)
+    if resolution:
+        params["resolution"] = resolution.group(1).lower()
+    fps = re.search(r"(?:fps|帧率)\s*[=:：]?\s*([0-9]{1,3}(?:\.[0-9]+)?)", lower)
+    if fps:
+        params["fps"] = fps.group(1)
+    return params
+
+
 def parse_request(text: str, items: list[attachments.Attachment]) -> LocalRequest | None:
     raw = (text or "").strip()
     lower = raw.lower()
@@ -360,15 +325,13 @@ def parse_request(text: str, items: list[attachments.Attachment]) -> LocalReques
             title="Transcode",
             attachment=video,
             target_format=m.group(1) or "mp4",
+            params=parse_transcode_params(raw),
         )
 
     # Natural-language convenience triggers.
     if any(word in lower for word in ("derpibooru", "derpi", "呆站")):
         if any(word in lower for word in ("找", "搜", "下载", "抓取", "来", "给我", "find", "search", "download")):
-            query = raw
-            for word in ("derpibooru", "derpi", "呆站", "帮我", "请", "找", "搜索", "搜", "下载", "抓取", "来一张", "来几张", "来", "给我", "一张", "几张", "图片", "图像", "的", "find", "search", "download", "some", "pictures", "images"):
-                query = re.sub(re.escape(word), " ", query, flags=re.IGNORECASE)
-            return LocalRequest(kind="derpi", title="Derpibooru", query=query.strip() or "twilight sparkle")
+            return LocalRequest(kind="derpi", title="Derpibooru", query=derpi.extract_query(raw))
     if any(word in lower for word in ("超分", "超分辨率", "放大", "upscale", "esrgan")):
         image = _first_image(items)
         if image is not None:
@@ -386,6 +349,7 @@ def parse_request(text: str, items: list[attachments.Attachment]) -> LocalReques
                 title="Transcode",
                 attachment=video,
                 target_format=fmt_match.group(1) if fmt_match else "mp4",
+                params=parse_transcode_params(raw),
             )
     return None
 
@@ -396,7 +360,7 @@ def run(request: LocalRequest) -> list[Path]:
     if request.error == "video":
         raise LocalActionError("please attach a video first")
     if request.kind == "derpi":
-        return _download_derpi(request.query)
+        return derpi.search_download(request.query)
     if request.attachment is None:
         raise LocalActionError("missing attachment")
     if request.kind == "upscale":
@@ -404,5 +368,5 @@ def run(request: LocalRequest) -> list[Path]:
     if request.kind == "audio":
         return _extract_audio(request.attachment.path)
     if request.kind == "transcode":
-        return _transcode(request.attachment.path, request.target_format)
+        return _transcode(request.attachment.path, request.target_format, request.params)
     raise LocalActionError("unknown local action")

@@ -23,8 +23,8 @@ Twilight Harness 是一个 **Windows 10/11 x64** 桌面应用。它通过兼容 
 
 | 版本 | 主要定位 | 体积 |
 | --- | --- | --- |
-| **标准版** `twilight-harness.exe` | 纯聊天 + 双栏思考 + Markdown / 表格 | **26.74 MB** |
-| **附件版** `twilight-harness-file.exe` | 标准版全部功能 + 附件 / OCR / 识图 / 视频 / 本地工具 / 旧 Office 兼容 | **91.15 MB** |
+| **标准版** `twilight-harness.exe` | 纯聊天 + 双栏思考 + Markdown / 表格 | **26.75 MB** |
+| **附件版** `twilight-harness-file.exe` | 标准版全部功能 + 附件 / OCR / 识图 / 视频 / 本地工具 / 旧 Office 兼容 | **91.16 MB** |
 
 > 标准版不显示附件入口；附件版是功能超集，两者共享同一套 UI、API 配置和运行时清理机制。
 
@@ -60,7 +60,7 @@ Twilight Harness 是一个 **Windows 10/11 x64** 桌面应用。它通过兼容 
 | 视频附件 | — | ✅ |
 | ffmpeg 音频分离 / 转码 | — | ✅ |
 | Real-ESRGAN 超分辨率 | — | ✅ |
-| Derpibooru 图片下载 | — | ✅ |
+| Derpibooru 图片下载 | ✅ | ✅ |
 | `.doc/.ppt/.xls` 临时转换 | — | ✅ |
 | 关闭清理 `fonts/`、`temp/`、`data/`、`log/` | ✅ | ✅ |
 
@@ -179,22 +179,42 @@ Ctrl + Enter 发送        Alt + Enter 添加附件
 
 转换需要本机安装 Microsoft Office 或 WPS；未安装时会显示对应错误提示，不会上传原始文件到其他服务。
 
-### 本地工具（附件版）
+### 本地工具
 
-这些操作由本地程序直接完成，不经过模型 API，也不会删除用户的 Downloads 文件夹。
+这些操作由本地程序直接完成，不会删除用户的 Downloads 文件夹。
+
+- **标准版**：支持 Derpibooru 图片搜索下载；
+- **附件版**：额外支持 Real-ESRGAN 超分、视频音频分离、视频转码。
+
+Derpibooru 搜索允许 **safe / suggestive / semi-grimdark** 三个评级，对应标准 default filter，不使用 safe-only 过滤。
 
 | 命令 | 需要附件 | 输出 |
 | --- | --- | --- |
-| `/derpi <tags>` | 无 | 从 Derpibooru 搜索安全图片，经 `derpicdn.net` 下载到 Downloads |
+| `/derpi <tags>` | 无 | 从 Derpibooru 搜索 safe / suggestive / semi-grimdark 图片，经 `derpicdn.net` 下载到 Downloads |
 | `/upscale` | 图片 | Real-ESRGAN x4 动漫模型超分，保存 PNG |
 | `/audio` | 视频 | 分离音轨，保存 M4A |
-| `/transcode webm` | 视频 | 转码为 mp4 / webm / mkv / mov / gif |
+| `/transcode webm` | 视频 | 转码为 mp4 / webm / mkv / mov / gif，可设码率/分辨率/音频码率 |
 
 自然语言也会触发对应工具，例如：
 
 - “帮我找几张紫悦的呆站图片”
 - 附加图片后说“把这张图超分一下”
-- 附加视频后说“提取音频”或“转码成 webm”
+- 附加视频后说“提取音频”或“转码成 webm，分辨率 720p，视频码率 2M”
+
+转码参数示例：
+
+```text
+/transcode mp4 video_bitrate=2M resolution=720p audio_bitrate=128k fps=30
+```
+
+模型也可以通过 API 返回本地工具命令，自动触发同一套功能：
+
+```text
+[[LOCAL_TOOL: {"tool":"derpi","query":"sunny starscout"}]]
+[[LOCAL_TOOL: {"tool":"transcode","format":"webm","video_bitrate":"2M","resolution":"720p","audio_bitrate":"128k"}]]
+```
+
+应用会隐藏这些命令，在回复结束后执行本地工具并显示文件路径。标准版只执行 Derpibooru 工具；附件版执行全部工具。
 
 输出目录：
 
@@ -378,7 +398,9 @@ twilight-app/              Python + Tkinter 源码
   app.py                   页面状态与聊天流程
   widgets.py               自绘控件、窗口按钮、Markdown 渲染
   markdown_tables.py       Markdown / HTML 表格渲染
-  local_actions.py         Derpibooru / Real-ESRGAN / 音视频本地工具
+  derpi.py                 Derpibooru 搜索、评级过滤与 derpicdn 下载
+  local_actions.py         Real-ESRGAN / 音视频本地工具（附件版）
+  local_tools.py           模型发起的本地工具调用协议
   api_client.py            OpenAI 兼容客户端、SSE、配置
   attachments.py           PDF/Office/图片 OCR/识图提取
   ui_strings.py            12 种语言文案
@@ -414,7 +436,7 @@ twilight-harness-file/     本地构建的附件版产物
 - 附件引用 `×` 撤销与发送时过滤；
 - 思考端、输出端 Markdown / 表格渲染；
 - 视频 12–72 帧抽帧、联系表、帧 OCR 和多模态请求；
-- Derpibooru 安全图片搜索与 derpicdn.net 下载；
+- Derpibooru 搜索（safe / suggestive / semi-grimdark）与 derpicdn.net 下载；
 - Real-ESRGAN 超分、ffmpeg 音频分离与转码；
 - Real-ESRGAN 图片超分；
 - ffmpeg 音频分离和视频转码；

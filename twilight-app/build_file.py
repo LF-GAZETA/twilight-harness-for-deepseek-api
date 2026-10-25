@@ -163,6 +163,8 @@ def main() -> int:
         APP / "attachments.py",
         APP / "markdown_tables.py",
         APP / "local_actions.py",
+        APP / "derpi.py",
+        APP / "local_tools.py",
         APP / "feature_flags.py",
     ]
     for module in modules:
