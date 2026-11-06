@@ -125,6 +125,20 @@ H3 运行时、`/video`、`/video --ref`、CPU Offload、INT4/INT8/BF16 切换�
 - 视频首帧缩略图；
 - Tk 停止维护。
 
+### 发布目录
+
+五个版本的目录已放在仓库内：
+
+```text
+release/rc-261106/twilight-harness-plus/
+release/rc-261106/twilight-harness-plus-debug/
+release/rc-261106/twilight-harness/
+release/rc-261106/twilight-harness-chat/
+release/rc-261106/twilight-harness-benchmark/
+```
+
+每个目录包含独立 `python/`、`sidecar/`、`twilight-app/`、`ai/models/`、`assets/`、`variant.txt` 和对应 EXE。模型较大，已加入 `.gitignore`，通过 Release 资产分发。
+
 ### 安装与运行
 
 1. 解压对应版本分卷；
