@@ -112,8 +112,6 @@ def main() -> int:
     if missing_fonts:
         print(f"ERROR: missing bundled font files: {missing_fonts}", file=sys.stderr)
         return 2
-    write_feature_flags(False)
-    character_module = build_character_module(character)
     icon = BUILD / "app.ico"
     if not icon.is_file():
         run([sys.executable, str(BUILD / "make_icon.py")], cwd=ROOT)
@@ -152,6 +150,8 @@ def main() -> int:
         if not module.is_file():
             print(f"ERROR: missing source module {module}", file=sys.stderr)
             return 2
+    write_feature_flags(False)
+    character_module = build_character_module(character)
     subprocess.run(
         [sys.executable, "-m", "py_compile", *[str(m) for m in modules]],
         cwd=ROOT,
@@ -198,6 +198,44 @@ def main() -> int:
         "attachments",
         "--exclude-module",
         "local_actions",
+        "--exclude-module",
+        "vhs_ntscqt",
+        "--exclude-module",
+        "vhs_video",
+        "--exclude-module",
+        "vhs_audio",
+        "--exclude-module",
+        "pedalboard",
+        "--exclude-module",
+        "pedalboard_native",
+        "--exclude-module",
+        "numpy",
+        # Local AI features (SD1.5 / GPT-SoVITS / UVR / Whisper) are only in the
+        # attachment edition; keep the standard EXE small.
+        "--exclude-module",
+        "ai_compat",
+        "--exclude-module",
+        "ai_resources",
+        "--exclude-module",
+        "ai_prompt",
+        "--exclude-module",
+        "ai_sd15",
+        "--exclude-module",
+        "ai_audio",
+        "--exclude-module",
+        "build_ai_common",
+        "--exclude-module",
+        "onnxruntime",
+        "--exclude-module",
+        "onnx",
+        "--exclude-module",
+        "tokenizers",
+        "--exclude-module",
+        "zstandard",
+        "--exclude-module",
+        "scipy",
+        "--exclude-module",
+        "cv2",
         "--runtime-tmpdir",
         ".",
         "--add-data",

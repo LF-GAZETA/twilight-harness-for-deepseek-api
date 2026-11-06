@@ -7,12 +7,17 @@ application never deletes Downloads.
 from __future__ import annotations
 
 import concurrent.futures
+import http.client
+import ipaddress
 import json
 import os
 import random
 import re
 import shutil
+import socket
+import ssl
 import subprocess
+import threading
 import tempfile
 import time
 import urllib.error
@@ -24,8 +29,18 @@ import paths
 import tag_table
 
 ALLOWED_RATINGS = ("safe", "suggestive", "semi-grimdark")
+API_HOST = "derpibooru.org"
+# Cloudflare edge IPs for derpibooru.org.  The system DNS on some networks is
+# poisoned to an unreachable address; these are tried first, with the hostname
+# still used for SNI and certificate verification.
+API_FALLBACK_IPS = ("104.26.15.212", "104.26.14.212", "172.67.71.84")
+API_IP_ENV = "TWILIGHT_DERPIBOORU_IPS"
+_WORKING_API_IP: str | None = None
 MAX_IMAGE_DOWNLOADS = 5000
+MAX_IMAGE_BYTES = 30 * 1024 * 1024
 PER_PAGE = 50
+IMAGE_FORMATS = {"png", "jpg", "jpeg", "webp", "gif"}
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 _RATING_TAGS = {"safe", "suggestive", "semi-grimdark", "questionable", "explicit"}
 
 _KNOWN_TAGS = [
@@ -283,9 +298,9 @@ def extract_query(text: str) -> str:
 
 
 def is_request(text: str) -> bool:
-    """Only an explicit /derpi command bypasses model translation."""
+    """Only an explicit /derpi or /derpibooru slash command bypasses the model."""
     raw = (text or "").strip()
-    return bool(re.match(r"^/?(?:derpi|derpibooru)\b", raw, flags=re.IGNORECASE))
+    return bool(re.match(r"^/(?:derpi|derpibooru)\b", raw, flags=re.IGNORECASE))
 
 def _is_allowed(image: dict) -> bool:
     tags = {str(tag).lower() for tag in image.get("tags") or []}
@@ -293,13 +308,132 @@ def _is_allowed(image: dict) -> bool:
         view_url = str(image.get("view_url") or "")
         if not any(f"__{rating}_" in view_url for rating in ALLOWED_RATINGS):
             return False
-    return not ({"explicit", "questionable"} & tags)
+    if {"explicit", "questionable"} & tags:
+        return False
+    fmt = str(image.get("format") or "").lower()
+    if fmt and fmt not in IMAGE_FORMATS:
+        return False
+    # Derpibooru search also returns short videos/animations; `format` above
+    # filters those out.  Do not use `duration` here: ordinary images also
+    # report a small duration field.
+    return True
 
 
 def _date_term(value: str) -> str:
     value = (value or "").strip()
     match = re.match(r"(\d{4}-\d{2}-\d{2})", value)
     return match.group(1) if match else ""
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPS connection to a fixed IP while keeping the real hostname for SNI."""
+
+    def __init__(self, host: str, ip: str, **kwargs) -> None:
+        super().__init__(host, **kwargs)
+        self._pinned_ip = ip
+
+    def connect(self) -> None:
+        self.sock = socket.create_connection(
+            (self._pinned_ip, self.port), self.timeout, self.source_address
+        )
+        server_hostname = self._tunnel_host or self.host
+        if self._tunnel_host:
+            self._tunnel()
+        self.sock = self._context.wrap_socket(
+            self.sock, server_hostname=server_hostname
+        )
+
+
+def _api_candidate_ips() -> list[str]:
+    """Available derpibooru.org edge IPs: env override, CDN DNS, then defaults."""
+    candidates: list[str] = []
+    for part in re.split(r"[,;\s]+", os.environ.get(API_IP_ENV, "").strip()):
+        if part and part not in candidates:
+            candidates.append(part)
+    # derpicdn.net uses the same Cloudflare edge and its DNS is usually healthy.
+    try:
+        for info in socket.getaddrinfo("derpicdn.net", 443, type=socket.SOCK_STREAM):
+            ip = info[4][0]
+            if ip not in candidates:
+                candidates.append(ip)
+    except OSError:
+        pass
+    for ip in API_FALLBACK_IPS:
+        if ip not in candidates:
+            candidates.append(ip)
+    valid: list[str] = []
+    for ip in candidates:
+        try:
+            ipaddress.ip_address(ip)
+        except ValueError:
+            continue
+        valid.append(ip)
+    # Prefer IPv4; it is the least surprising on Windows.
+    return [ip for ip in valid if ":" not in ip] + [ip for ip in valid if ":" in ip]
+
+
+def _pinned_api_json(url: str, ip: str, timeout: float = 8.0) -> dict:
+    parsed = urllib.parse.urlsplit(url)
+    path = urllib.parse.urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
+    connection = _PinnedHTTPSConnection(
+        API_HOST, ip, timeout=timeout, context=ssl.create_default_context()
+    )
+    try:
+        connection.request(
+            "GET",
+            path,
+            headers={
+                "User-Agent": "TwilightHarness/1.0 (fan project; local desktop client)",
+                "Accept": "application/json",
+            },
+        )
+        response = connection.getresponse()
+        body = response.read()
+        if response.status != 200:
+            raise urllib.error.HTTPError(
+                url, response.status, response.reason, response.headers, None
+            )
+        return json.loads(body.decode("utf-8", errors="replace"))
+    finally:
+        try:
+            connection.close()
+        except OSError:
+            pass
+
+
+def _api_json(url: str, timeout: float = 8.0) -> dict:
+    """Call the API through a working pinned IP, then fall back to normal DNS."""
+    global _WORKING_API_IP
+    errors: list[str] = []
+    candidates: list[str] = []
+    if _WORKING_API_IP:
+        candidates.append(_WORKING_API_IP)
+    for ip in _api_candidate_ips():
+        if ip not in candidates:
+            candidates.append(ip)
+    for ip in candidates:
+        try:
+            data = _pinned_api_json(url, ip, timeout=timeout)
+            _WORKING_API_IP = ip
+            return data
+        except urllib.error.HTTPError:
+            # Rate limits / HTTP errors are server-wide: let the caller retry.
+            raise
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{ip}: {type(exc).__name__}: {exc}")
+            if _WORKING_API_IP == ip:
+                _WORKING_API_IP = None
+    # Last resort: normal urllib path (honors a system HTTPS proxy and DNS).
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "TwilightHarness/1.0 (fan project; local desktop client)"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=max(timeout, 10.0)) as response:
+            return json.loads(response.read().decode("utf-8", errors="replace"))
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"DNS: {type(exc).__name__}: {exc}")
+    raise DerpiError("Derpibooru API unreachable: " + "; ".join(errors[-4:]))
 
 
 def _search_payload(q: str, page: int = 1, sort: str = "created_at") -> dict:
@@ -310,16 +444,11 @@ def _search_payload(q: str, page: int = 1, sort: str = "created_at") -> dict:
         "sf": sort,
         "sd": "desc",
     }
-    url = "https://derpibooru.org/api/v1/json/search/images?" + urllib.parse.urlencode(params)
-    request = urllib.request.Request(
-        url,
-        headers={"User-Agent": "TwilightHarness/1.0 (fan project; local desktop client)"},
-    )
+    url = "https://" + API_HOST + "/api/v1/json/search/images?" + urllib.parse.urlencode(params)
     last_error: Exception | None = None
     for attempt in range(5):
         try:
-            with urllib.request.urlopen(request, timeout=45) as response:
-                return json.loads(response.read().decode("utf-8", errors="replace"))
+            return _api_json(url, timeout=8.0)
         except Exception as exc:  # noqa: BLE001
             last_error = exc
             retry_after = 0.8 * (attempt + 1)
@@ -463,6 +592,9 @@ def _safe_image_urls(image: dict) -> list[str]:
             parsed.netloc == "derpicdn.net" or parsed.netloc.endswith(".derpicdn.net")
         ):
             continue
+        suffix = Path(parsed.path).suffix.lower()
+        if suffix and suffix not in IMAGE_SUFFIXES:
+            continue
         if url not in result:
             result.append(url)
     return result
@@ -481,10 +613,11 @@ def _curl_download(url: str, target: Path) -> tuple[bool, str]:
         "--show-error",
         "--retry",
         "2",
+        "--max-time", "45",
         "--connect-timeout",
         "15",
-        "--max-time",
-        "120",
+        "--max-filesize",
+        str(MAX_IMAGE_BYTES),
         "-A",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128 Safari/537.36",
         "-e",
@@ -502,7 +635,7 @@ def _curl_download(url: str, target: Path) -> tuple[bool, str]:
         )
     except Exception as exc:  # noqa: BLE001
         return False, f"curl: {exc}"
-    if result.returncode == 0 and part.is_file() and 0 < part.stat().st_size <= 30 * 1024 * 1024:
+    if result.returncode == 0 and part.is_file() and 0 < part.stat().st_size <= MAX_IMAGE_BYTES:
         try:
             part.replace(target)
             return True, ""
@@ -525,7 +658,31 @@ def _emit_progress(progress, event: dict) -> None:
         pass
 
 
-def _download_one(image: dict, folder: Path, progress=None) -> Path | None:
+def _batch_fields(batch: dict | None) -> dict:
+    if not batch:
+        return {}
+    lock = batch.get("lock")
+    if lock is None:
+        return {"batch_done": int(batch.get("done") or 0),
+                "batch_total": int(batch.get("total") or 0)}
+    with lock:
+        return {"batch_done": int(batch.get("done") or 0),
+                "batch_total": int(batch.get("total") or 0)}
+
+
+def _batch_step(batch: dict | None) -> dict:
+    if not batch:
+        return {}
+    lock = batch.get("lock")
+    if lock is not None:
+        with lock:
+            batch["done"] = int(batch.get("done") or 0) + 1
+    else:
+        batch["done"] = int(batch.get("done") or 0) + 1
+    return _batch_fields(batch)
+
+
+def _download_one(image: dict, folder: Path, progress=None, batch: dict | None = None) -> Path | None:
     image_id = str(image.get("id") or int(time.time() * 1000))
     row_id = f"download-{image_id}"
     label = f"derpibooru-{image_id}"
@@ -533,7 +690,8 @@ def _download_one(image: dict, folder: Path, progress=None) -> Path | None:
     _emit_progress(
         progress,
         {"id": row_id, "kind": "download", "name": label,
-         "fraction": 0.0, "done": 0, "total": total_hint, "state": "running"},
+         "fraction": 0.0, "done": 0, "total": total_hint, "state": "running",
+         **_batch_fields(batch)},
     )
     urls = _safe_image_urls(image)
     if not urls:
@@ -541,7 +699,8 @@ def _download_one(image: dict, folder: Path, progress=None) -> Path | None:
         _emit_progress(
             progress,
             {"id": row_id, "kind": "download", "name": label,
-             "fraction": 0.0, "done": 0, "total": total_hint, "state": "error"},
+             "fraction": 0.0, "done": 0, "total": total_hint, "state": "error",
+             **_batch_step(batch)},
         )
         return None
     suffix = Path(urllib.parse.urlparse(urls[0]).path).suffix.lower()
@@ -559,10 +718,11 @@ def _download_one(image: dict, folder: Path, progress=None) -> Path | None:
     }
     last_error = ""
     for url in urls:
+        too_large = False
         for attempt in range(2):
             try:
                 request = urllib.request.Request(url, headers=headers)
-                with urllib.request.urlopen(request, timeout=60) as response:
+                with urllib.request.urlopen(request, timeout=20) as response:
                     total = int(
                         response.headers.get("Content-Length")
                         or total_hint
@@ -570,41 +730,57 @@ def _download_one(image: dict, folder: Path, progress=None) -> Path | None:
                     )
                     chunks: list[bytes] = []
                     done = 0
-                    while True:
-                        chunk = response.read(64 * 1024)
-                        if not chunk:
-                            break
-                        done += len(chunk)
-                        if done > 30 * 1024 * 1024:
-                            break
-                        chunks.append(chunk)
-                        fraction = (done / total) if total > 0 else 0.0
-                        _emit_progress(
-                            progress,
-                            {"id": row_id, "kind": "download", "name": label,
-                             "fraction": min(0.99, fraction), "done": done,
-                             "total": total, "state": "running"},
-                        )
+                    if total > MAX_IMAGE_BYTES:
+                        # Do not download a huge body just to reject it; move on
+                        # to the large/medium/small representation.
+                        too_large = True
+                    else:
+                        while True:
+                            chunk = response.read(64 * 1024)
+                            if not chunk:
+                                break
+                            done += len(chunk)
+                            if done > MAX_IMAGE_BYTES:
+                                too_large = True
+                                break
+                            chunks.append(chunk)
+                            fraction = (done / total) if total > 0 else 0.0
+                            _emit_progress(
+                                progress,
+                                {"id": row_id, "kind": "download", "name": label,
+                                 "fraction": min(0.99, fraction), "done": done,
+                                 "total": total, "state": "running",
+                                 **_batch_fields(batch)},
+                            )
                     payload = b"".join(chunks)
-                if 0 < len(payload) <= 30 * 1024 * 1024:
+                if not too_large and 0 < len(payload) <= MAX_IMAGE_BYTES:
                     part.write_bytes(payload)
                     part.replace(target)
                     _emit_progress(
                         progress,
                         {"id": row_id, "kind": "download", "name": label,
                          "fraction": 1.0, "done": len(payload),
-                         "total": len(payload), "state": "done"},
+                         "total": len(payload), "state": "done",
+                         **_batch_step(batch)},
                     )
                     return target
-                last_error = f"HTTP body size {len(payload)}"
+                if too_large:
+                    last_error = f"image too large (> {MAX_IMAGE_BYTES // (1024 * 1024)} MB): {url}"
+                else:
+                    last_error = f"HTTP body size {len(payload)}"
             except Exception as exc:  # noqa: BLE001
                 last_error = f"{type(exc).__name__}: {exc}"
             if attempt == 0:
                 time.sleep(0.4)
+        if too_large:
+            # Try the next representation (large/medium/small) instead of
+            # writing a truncated file or calling curl for the same URL.
+            continue
         _emit_progress(
             progress,
             {"id": row_id, "kind": "download", "name": label,
-             "fraction": 0.25, "done": 0, "total": total_hint, "state": "running"},
+             "fraction": 0.25, "done": 0, "total": total_hint, "state": "running",
+             **_batch_fields(batch)},
         )
         ok, curl_error = _curl_download(url, target)
         if ok:
@@ -615,7 +791,8 @@ def _download_one(image: dict, folder: Path, progress=None) -> Path | None:
             _emit_progress(
                 progress,
                 {"id": row_id, "kind": "download", "name": label,
-                 "fraction": 1.0, "done": size, "total": size, "state": "done"},
+                 "fraction": 1.0, "done": size, "total": size, "state": "done",
+                 **_batch_step(batch)},
             )
             return target
         last_error = curl_error or last_error
@@ -627,7 +804,8 @@ def _download_one(image: dict, folder: Path, progress=None) -> Path | None:
     _emit_progress(
         progress,
         {"id": row_id, "kind": "download", "name": label,
-         "fraction": 0.0, "done": 0, "total": total_hint, "state": "error"},
+         "fraction": 0.0, "done": 0, "total": total_hint, "state": "error",
+         **_batch_step(batch)},
     )
     return None
 
@@ -639,23 +817,32 @@ def _download_images(images: list[dict], limit: int, progress=None) -> list[Path
     _LAST_DOWNLOAD_ERRORS.clear()
     folder = save_dir()
     _probe_writable(folder)
-    selected = [image for image in images if _is_allowed(image)][:limit]
+    selected = list(images)[:limit]
     saved: list[Path] = []
     if not selected:
         return saved
-    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
-        pending = {
-            executor.submit(_download_one, image, folder, progress): image
-            for image in selected
-        }
-        for future in concurrent.futures.as_completed(pending):
+    batch = {"total": len(selected), "done": 0, "lock": threading.Lock()}
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=6)
+    pending = {
+        executor.submit(_download_one, image, folder, progress, batch): image
+        for image in selected
+    }
+    try:
+        for future in concurrent.futures.as_completed(pending, timeout=90):
             try:
                 path = future.result()
             except Exception as exc:  # noqa: BLE001
                 _LAST_DOWNLOAD_ERRORS.append(str(exc))
+                _batch_step(batch)
                 continue
             if path is not None:
                 saved.append(path)
+    except concurrent.futures.TimeoutError:
+        _LAST_DOWNLOAD_ERRORS.append("Derpibooru download timed out after 90s")
+        for future in pending:
+            future.cancel()
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
     return saved
 
 def download_selected(images: list[dict], limit: int, progress=None) -> list[Path]:

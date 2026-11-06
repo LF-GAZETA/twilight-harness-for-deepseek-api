@@ -41,8 +41,8 @@ SETUP_TITLE_TEXT = "#361759"
 # Font resolution
 # ---------------------------------------------------------------------------
 LATIN_FAMILY = "Uni Neue"
-CJK_FAMILY = "微软雅黑"
-CJK_BOLD_FAMILY = "微软雅黑"
+CJK_FAMILY = "Source Han Sans"
+CJK_BOLD_FAMILY = "Source Han Sans"
 OTHER_FAMILY = "Source Han Sans JP"
 MONO_FAMILY = "Consolas"
 
@@ -71,8 +71,8 @@ def init_fonts(root: tk.Misc) -> None:
     )
     CJK_FAMILY = _pick(
         families,
-        ["微软雅黑", "Microsoft YaHei UI", "Microsoft YaHei", "思源黑体"],
-        "Microsoft YaHei",
+        ["Source Han Sans", "Source Han Sans SC", "Noto Sans SC", "微软雅黑"],
+        "Source Han Sans",
     )
     CJK_BOLD_FAMILY = CJK_FAMILY
     OTHER_FAMILY = _pick(

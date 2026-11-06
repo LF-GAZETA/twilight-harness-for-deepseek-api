@@ -374,6 +374,7 @@ class RoundedEntry(tk.Canvas):
         on_submit: Callable[[], None] | None = None,
         font: tkfont.Font | None = None,
         bg: str = theme.BG,
+        mask: bool = False,
     ) -> None:
         super().__init__(
             master,
@@ -389,6 +390,7 @@ class RoundedEntry(tk.Canvas):
         self._radius = radius
         self._placeholder = placeholder or ""
         self._placeholder_active = False
+        self._mask = bool(mask)
         self._suppress = False
         self._enabled = True
         self._focused = False
@@ -412,6 +414,7 @@ class RoundedEntry(tk.Canvas):
             selectbackground=theme.BUTTON,
             selectforeground=theme.BLACK,
             font=self._font,
+            show="•" if self._mask else "",
         )
         self._window = self.create_window(
             14,
@@ -449,6 +452,7 @@ class RoundedEntry(tk.Canvas):
             self._entry.configure(fg=theme.BLACK)
             if not self._focused:
                 self._apply_placeholder()
+        self._sync_mask_show()
         self._suppress = False
         self._draw()
         self._notify_change()
@@ -474,6 +478,7 @@ class RoundedEntry(tk.Canvas):
             self._suppress = True
             self.var.set(self._placeholder)
             self._suppress = False
+            self._sync_mask_show()
             self._draw()
 
     def set_locale(self, locale: str, placeholder: str | None = None) -> None:
@@ -498,6 +503,7 @@ class RoundedEntry(tk.Canvas):
         if not self._placeholder_active and not self.var.get():
             self._apply_placeholder()
             self._entry.configure(fg=theme.PLACEHOLDER)
+        self._sync_mask_show()
         self._draw()
 
     def _apply_placeholder(self) -> None:
@@ -508,6 +514,7 @@ class RoundedEntry(tk.Canvas):
         self.var.set(self._placeholder)
         self._suppress = False
         self._entry.configure(fg=theme.PLACEHOLDER)
+        self._sync_mask_show()
 
     def _remove_placeholder(self) -> None:
         if not self._placeholder_active:
@@ -517,10 +524,21 @@ class RoundedEntry(tk.Canvas):
         self._suppress = False
         self._placeholder_active = False
         self._entry.configure(fg=theme.BLACK)
+        self._sync_mask_show()
+
+    def _sync_mask_show(self) -> None:
+        """Show bullets only for real content; placeholder text stays readable."""
+        if not self._mask:
+            return
+        try:
+            self._entry.configure(show="" if self._placeholder_active else "•")
+        except tk.TclError:
+            pass
 
     def _focus_in(self, _event=None):
         self._focused = True
         self._remove_placeholder()
+        self._sync_mask_show()
         self._draw()
 
     def _focus_out(self, _event=None):
@@ -528,6 +546,7 @@ class RoundedEntry(tk.Canvas):
         if not self.var.get().strip():
             self._apply_placeholder()
             self._entry.configure(fg=theme.PLACEHOLDER)
+        self._sync_mask_show()
         self._draw()
         self._notify_change()
 
@@ -1078,6 +1097,10 @@ class Composer(tk.Canvas):
 
     def insert_attachment(self, name: str, on_remove=None) -> None:
         """Append a removable, underlined attachment reference."""
+        for marker in (" 时长：", " 时长:", " 分辨率：", " 分辨率:", " 视频帧"):
+            if marker in name:
+                name = name.split(marker, 1)[0].strip()
+                break
         if self._placeholder_active:
             self._clear_placeholder()
         try:

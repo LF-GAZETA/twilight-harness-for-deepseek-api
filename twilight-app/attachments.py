@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -32,11 +33,11 @@ VISION_MAX_DIMENSION = 2048
 MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024
 MAX_VIDEO_SLICES = 64
 VIDEO_SLICE_BYTES = 50 * 1024 * 1024
-MIN_VIDEO_FRAMES = 12
-MAX_VIDEO_FRAMES = 72
+MIN_VIDEO_FRAMES = 16
+MAX_VIDEO_FRAMES = 256
 VIDEO_SHEET_COLS = 4
 VIDEO_SHEET_ROWS = 3
-VIDEO_OCR_FRAMES = 12
+VIDEO_OCR_FRAMES = 32
 
 _TEXT_SUFFIXES = {
     ".txt",
@@ -79,6 +80,7 @@ _TEXT_SUFFIXES = {
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
 _VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".wmv", ".flv", ".ts"}
 _LEGACY_SUFFIXES = {".doc": ".docx", ".xls": ".xlsx", ".ppt": ".pptx"}
+_VISIO_SUFFIXES = {".vsd", ".vsdx"}
 
 
 class AttachmentError(Exception):
@@ -121,16 +123,28 @@ def _clean_text(text: str) -> str:
 
 
 def _read_text_file(path: Path) -> str:
+    """Decode a text attachment, trusting BOMs and never guessing UTF-16.
+
+    Windows ANSI text files are usually GBK/GB18030 *without* a BOM.  A
+    BOM-less UTF-16 decode "succeeds" on almost any even-length byte string and
+    yields mojibake, so UTF-16 is only accepted when its BOM is present.
+    """
     data = path.read_bytes()
-    for encoding in ("utf-8-sig", "utf-16", "gb18030", "cp1252", "latin-1"):
+    if data.startswith(b"\xef\xbb\xbf"):
+        candidates = ("utf-8-sig",)
+    elif data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        candidates = ("utf-16",)
+    else:
+        candidates = ("utf-8", "gb18030", "cp1252", "latin-1")
+    for encoding in candidates:
         try:
             text = data.decode(encoding)
-            # Reject obvious binary data even if latin-1 can decode it.
-            if encoding == "latin-1" and "\x00" in text[:4096]:
-                continue
-            return text
         except (UnicodeDecodeError, LookupError):
             continue
+        # latin-1 decodes every byte string, so reject obvious binary data here.
+        if encoding == "latin-1" and "\x00" in text[:4096]:
+            continue
+        return text
     raise AttachmentError("read", "text encoding")
 
 def _extract_pdf(path: Path) -> str:
@@ -209,6 +223,96 @@ def _extract_pptx(path: Path) -> str:
     except Exception as exc:  # noqa: BLE001
         raise AttachmentError("read", f"PowerPoint: {exc}") from exc
 
+
+def _pptx_visual(path: Path) -> tuple[str, ...]:
+    """Export each slide to a PNG and return data URIs for vision input."""
+    try:
+        import pythoncom
+        import win32com.client
+    except ImportError:
+        return ()
+    folder = path.parent / f".twilight_ppt_{os.getpid()}_{int(time.time())}"
+    folder.mkdir(parents=True, exist_ok=True)
+    app = None
+    presentation = None
+    try:
+        pythoncom.CoInitialize()
+        app = win32com.client.DispatchEx("PowerPoint.Application")
+        presentation = app.Presentations.Open(str(path), ReadOnly=True, WithWindow=False)
+        uris: list[str] = []
+        for index in range(1, presentation.Slides.Count + 1):
+            target = folder / f"slide_{index:03d}.png"
+            presentation.Slides(index).Export(str(target), "PNG", 1280, 720)
+            if target.is_file():
+                uris.append(_image_data_uri(target))
+        return tuple(uris)
+    except Exception:  # noqa: BLE001
+        return ()
+    finally:
+        try:
+            if presentation is not None:
+                presentation.Close()
+            if app is not None:
+                app.Quit()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _extract_visio(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix == ".vsdx":
+        import zipfile
+        parts: list[str] = []
+        try:
+            with zipfile.ZipFile(path) as archive:
+                for name in sorted(archive.namelist()):
+                    if not name.startswith("visio/pages/page") or not name.endswith(".xml"):
+                        continue
+                    import xml.etree.ElementTree as ET
+                    root = ET.fromstring(archive.read(name))
+                    for node in root.iter():
+                        if node.tag.endswith("Text") and node.text and node.text.strip():
+                            parts.append(node.text.strip())
+        except Exception as exc:  # noqa: BLE001
+            raise AttachmentError("read", f"Visio: {exc}") from exc
+        return "\n".join(parts)
+    try:
+        import pythoncom
+        import win32com.client
+    except ImportError as exc:
+        raise AttachmentError("read", "Visio COM unavailable") from exc
+    app = None
+    document = None
+    try:
+        pythoncom.CoInitialize()
+        app = win32com.client.DispatchEx("Visio.Application")
+        app.Visible = False
+        document = app.Documents.OpenEx(str(path), 0)
+        parts = []
+        for page in document.Pages:
+            for shape in page.Shapes:
+                text = str(getattr(shape, "Text", "") or "").strip()
+                if text:
+                    parts.append(text)
+        return "\n".join(parts)
+    except Exception as exc:  # noqa: BLE001
+        raise AttachmentError("read", f"Visio: {exc}") from exc
+    finally:
+        try:
+            if document is not None:
+                document.Close()
+            if app is not None:
+                app.Quit()
+        except Exception:
+            pass
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
 
 def _extract_xlsx(path: Path) -> str:
     try:
@@ -529,7 +633,7 @@ def _parse_video_info(stderr: str) -> tuple[float, str]:
 def _video_frame_count(duration: float) -> int:
     if duration <= 0:
         return MIN_VIDEO_FRAMES
-    return max(MIN_VIDEO_FRAMES, min(MAX_VIDEO_FRAMES, int(round(duration))))
+    return max(MIN_VIDEO_FRAMES, min(MAX_VIDEO_FRAMES, int(round(duration * 4))))
 
 
 def _video_sheet_uris(frames: list[Path], duration: float, count: int) -> list[str]:
@@ -582,6 +686,61 @@ def _video_sheet_uris(frames: list[Path], duration: float, count: int) -> list[s
         encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
         uris.append("data:image/jpeg;base64," + encoded)
     return uris
+
+
+def _video_thumbnail(path: Path) -> str:
+    ffmpeg = _ffmpeg_path()
+    if not ffmpeg:
+        return ""
+    try:
+        import hashlib, tempfile
+        stat = path.stat()
+        key = hashlib.sha1(f"{path.resolve()}|{stat.st_mtime_ns}|{stat.st_size}".encode("utf-8")).hexdigest()[:20]
+        target = path.parent / f"{path.stem}.thumb.jpg"
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if not target.is_file() and not target.parent.is_dir():
+                raise OSError("parent unavailable")
+        except OSError:
+            folder = Path(tempfile.gettempdir()) / "twilight-video-thumbs"
+            folder.mkdir(parents=True, exist_ok=True)
+            target = folder / f"{key}.jpg"
+        if (not target.is_file()) or target.stat().st_mtime < stat.st_mtime:
+            _run_process([
+                ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+                "-ss", "0", "-i", str(path), "-frames:v", "1",
+                "-vf", "scale='min(640,iw)':-2", str(target),
+            ], timeout=30)
+        return str(target.resolve()) if target.is_file() and target.stat().st_size > 0 else ""
+    except Exception:
+        return ""
+
+
+def video_thumbnail(path: str | Path) -> str:
+    """Return a cached first-frame JPEG for a video, or an empty string."""
+    return _video_thumbnail(Path(path))
+
+
+def _video_metadata(path: Path) -> str:
+    ffmpeg = _ffmpeg_path()
+    if not ffmpeg:
+        return "视频附件：" + path.name + chr(10) + "（未找到 ffmpeg，暂不读取视频信息）"
+    try:
+        info = _run_process([ffmpeg, "-hide_banner", "-i", str(path)], timeout=30)
+        duration, resolution = _parse_video_info(info.stderr.decode("utf-8", errors="replace"))
+    except Exception:
+        duration, resolution = 0.0, "未知分辨率"
+    return ("视频附件：" + path.name + chr(10)
+            + f"时长：{duration:.2f} 秒" + chr(10)
+            + f"分辨率：{resolution}" + chr(10)
+            + "视频帧与 OCR 尚未提取；仅在用户明确要求分析视频时再按需提取。")
+
+
+def extract_video_frames(path: Path, size: int = 0) -> tuple[str, tuple[str, ...]]:
+    """Lazy frame extraction used only when an explicit video-analysis request arrives."""
+    if size and size > MAX_VIDEO_BYTES:
+        return _extract_video_sliced(path, size)
+    return _extract_video(path)
 
 
 def _extract_video(path: Path) -> tuple[str, tuple[str, ...]]:
@@ -660,7 +819,7 @@ def _extract_video(path: Path) -> tuple[str, tuple[str, ...]]:
     metadata = f"""视频附件：{path.name}
 时长：{duration:.2f} 秒
 分辨率：{resolution}
-已抽取 {len(frames)} 帧（根据时长在 12–72 帧之间自适应）。
+已抽取 {len(frames)} 帧（根据时长在 16–256 帧之间自适应）。
 帧已按 4×3 排列成 {len(uris)} 张联系表，按时间从左到右、从上到下排列；每格标注了帧号与时间。"""
     if ocr_parts:
         metadata += "\n\n视频帧 OCR 抽样：\n" + "\n\n".join(ocr_parts)
@@ -750,6 +909,15 @@ def _extract_video_sliced(path: Path, size: int) -> tuple[str, tuple[str, ...]]:
     return metadata, tuple(uris)
 
 
+def image_caption(path: str | Path) -> str:
+    """Load the local BLIP captioner only on an explicit vision request."""
+    try:
+        import vision_local
+        return vision_local.caption(path=Path(path)) or ""
+    except Exception:
+        return ""
+
+
 def extract_attachment(path: str | Path) -> Attachment:
     path = Path(path)
     try:
@@ -759,6 +927,22 @@ def extract_attachment(path: str | Path) -> Attachment:
     if not path.is_file():
         raise AttachmentError("read", "not a file")
     suffix = path.suffix.lower()
+    if suffix not in (_IMAGE_SUFFIXES | _VIDEO_SUFFIXES | set(_LEGACY_SUFFIXES) |
+                      _TEXT_SUFFIXES | {".pdf", ".docx", ".pptx", ".xlsx", ".xlsm"}):
+        try:
+            header = path.open("rb").read(16)
+        except OSError:
+            header = b""
+        if header.startswith(bytes([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])):
+            suffix = ".png"
+        elif header.startswith(bytes([0xFF, 0xD8, 0xFF])):
+            suffix = ".jpg"
+        elif header.startswith((b"GIF87a", b"GIF89a")):
+            suffix = ".gif"
+        elif header.startswith(bytes([0xFF, 0xD8, 0xFF])):
+            suffix = ".webp"
+        elif header.startswith(bytes([0xFF, 0xD8, 0xFF])):
+            suffix = ".bmp"
     limit = MAX_VIDEO_BYTES if suffix in _VIDEO_SUFFIXES else MAX_FILE_BYTES
     if stat.st_size > limit:
         raise AttachmentError("too_large", f"{stat.st_size / 1024 / 1024:.1f} MB")
@@ -774,20 +958,29 @@ def extract_attachment(path: str | Path) -> Attachment:
                 raise
             text = ""
     elif suffix in _VIDEO_SUFFIXES:
-        if stat.st_size > MAX_FILE_BYTES:
-            text, image_uris = _extract_video_sliced(path, stat.st_size)
-        else:
-            text, image_uris = _extract_video(path)
+        text = _video_metadata(path)
+        thumb = _video_thumbnail(path)
+        image_uri = thumb
+        image_uris = (thumb,) if thumb else ()
     elif suffix in _LEGACY_SUFFIXES:
         text = _extract_legacy(path, suffix)
+        if suffix == ".ppt":
+            image_uris = _pptx_visual(path)
+            image_uri = image_uris[0] if image_uris else ""
+            # PPT vision notes are generated only when the user asks for them.
+
     elif suffix == ".pdf":
         text = _extract_pdf(path)
     elif suffix == ".docx":
         text = _extract_docx(path)
     elif suffix == ".pptx":
         text = _extract_pptx(path)
+        image_uris = _pptx_visual(path)
+        image_uri = image_uris[0] if image_uris else ""
     elif suffix in {".xlsx", ".xlsm"}:
         text = _extract_xlsx(path)
+    elif suffix in {".vsd", ".vsdx"}:
+        text = _extract_visio(path)
     elif suffix in _TEXT_SUFFIXES:
         text = _read_text_file(path)
     else:

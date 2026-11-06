@@ -198,3 +198,7 @@ _MEI*/
 /tests/screenshots/
 
 /twilight-harness-file-debug/
+
+# Local runtime and models (hardlinked from the portable install)
+/runtime/
+/native/build/

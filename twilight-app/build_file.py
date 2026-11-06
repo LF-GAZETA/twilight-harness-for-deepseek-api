@@ -5,7 +5,7 @@ On first use the app unpacks fonts/ and temp/ beside the exe, installs the
 bundled fonts silently and deletes temp/ again when it exits.
 
 Usage (bundled Python):
-    python twilight-app/build_app.py
+    python twilight-app/build_file.py
 """
 
 from __future__ import annotations
@@ -104,6 +104,9 @@ def build_character_module(character: Path) -> Path:
 
 
 def main() -> int:
+    sys.path.insert(0, str(APP))
+    import build_ai_common
+
     character = CONTENT / "twilight-character.md"
     if not character.is_file() or character.stat().st_size < 1000:
         print(f"ERROR: missing/too-small character card: {character}", file=sys.stderr)
@@ -112,8 +115,6 @@ def main() -> int:
     if missing_fonts:
         print(f"ERROR: missing bundled font files: {missing_fonts}", file=sys.stderr)
         return 2
-    write_feature_flags(True)
-    character_module = build_character_module(character)
     icon = BUILD / "app.ico"
     if not icon.is_file():
         run([sys.executable, str(BUILD / "make_icon.py")], cwd=ROOT)
@@ -170,6 +171,15 @@ def main() -> int:
         APP / "local_tools.py",
         APP / "tag_table.py",
         APP / "feature_flags.py",
+        APP / "vhs_ntscqt.py",
+        APP / "vhs_video.py",
+        APP / "vhs_audio.py",
+        APP / "ai_compat.py",
+        APP / "ai_resources.py",
+        APP / "ai_prompt.py",
+        APP / "ai_sd15.py",
+        APP / "ai_audio.py",
+        APP / "build_ai_common.py",
     ]
     if not TAG_TABLE.is_file():
         print(f"ERROR: missing Derpibooru tag table {TAG_TABLE}", file=sys.stderr)
@@ -178,6 +188,8 @@ def main() -> int:
         if not module.is_file():
             print(f"ERROR: missing source module {module}", file=sys.stderr)
             return 2
+    write_feature_flags(True)
+    character_module = build_character_module(character)
     subprocess.run(
         [sys.executable, "-m", "py_compile", *[str(m) for m in modules]],
         cwd=ROOT,
@@ -185,7 +197,7 @@ def main() -> int:
     )
 
     # Rebuild from a clean PyInstaller workspace.
-    for stale in (DIST, BUILD / "file-build" / "work", BUILD / "file-build" / "twilight-harness-file.spec"):
+    for stale in (DIST, BUILD / "file-build" / "work", BUILD / "twilight-harness-file.spec"):
         try:
             if stale.is_dir():
                 shutil.rmtree(stale)
@@ -193,6 +205,10 @@ def main() -> int:
                 stale.unlink()
         except OSError:
             pass
+
+    ai_extra, ai_notes = build_ai_common.collect_ai_build_inputs()
+    for note in ai_notes:
+        print(f"AI: {note}")
 
     cmd = [
         sys.executable,
@@ -258,6 +274,13 @@ def main() -> int:
         "winrt.windows.media",
         "--collect-submodules",
         "winrt",
+        "--hidden-import",
+        "pedalboard",
+        "--hidden-import",
+        "pedalboard_native",
+        "--collect-submodules",
+        "pedalboard",
+        *ai_extra,
         "--runtime-tmpdir",
         ".",
         "--add-data",

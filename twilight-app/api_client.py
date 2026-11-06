@@ -15,6 +15,8 @@ import re
 import shutil
 import socket
 import ssl
+import subprocess
+import shutil
 import sys
 import urllib.error
 import urllib.request
@@ -68,6 +70,7 @@ class Settings:
     api_key: str = ""
     base_url: str = DEFAULT_BASE_URL
     model: str = DEFAULT_MODEL
+    api_key_from_env: bool = False
 
 
 @dataclass(frozen=True)
@@ -227,7 +230,12 @@ def load_settings(home: Path) -> Settings:
         base_url=_clean_value(values.get("base_url", "")) or DEFAULT_BASE_URL,
         model=_clean_value(values.get("model", "")) or DEFAULT_MODEL,
     )
-    settings.api_key = _clean_value(os.environ.get("TWILIGHT_API_KEY", "") or settings.api_key)
+    env_api_key = _clean_value(os.environ.get("TWILIGHT_API_KEY", ""))
+    if env_api_key:
+        # Non-empty environment override wins over the ini file; remember the
+        # provenance so the key is never persisted to disk from the env.
+        settings.api_key = env_api_key
+        settings.api_key_from_env = True
     settings.base_url = _clean_value(
         os.environ.get("TWILIGHT_API_BASE", "") or settings.base_url
     )
@@ -281,6 +289,52 @@ def _clean_url(base_url: str) -> str:
 
 def _log_request(url: str) -> None:
     LOGGER.debug("POST %s", url)
+
+
+class _CurlResponse:
+    """Streaming file-like wrapper around curl.exe.
+
+    The bundled Python/OpenSSL build can fail the TLS handshake against
+    some CDNs while Windows curl succeeds, so HTTPS requests go through
+    curl when it is available.
+    """
+
+    def __init__(self, url: str, headers: dict[str, str], body: bytes, timeout: int, stream: bool):
+        self._proc = subprocess.Popen(
+            [
+                "curl.exe", "-sS", "-N", "--fail-with-body",
+                "--max-time", str(timeout),
+                "-X", "POST", url,
+                "-H", f"Authorization: {headers['Authorization']}",
+                "-H", "Content-Type: application/json; charset=utf-8",
+                "-H", f"Accept: {headers['Accept']}",
+                "--data-binary", "@-",
+            ],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        try:
+            self._proc.stdin.write(body)
+            self._proc.stdin.close()
+        except Exception:
+            pass
+
+    def read(self) -> bytes:
+        return self._proc.stdout.read()
+
+    def __iter__(self):
+        return iter(self._proc.stdout)
+
+    def close(self) -> None:
+        try:
+            self._proc.terminate()
+        except Exception:
+            pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
 
 
 class DeepSeekClient:
@@ -399,8 +453,24 @@ class DeepSeekClient:
             "User-Agent": "TwilightHarness/1.0 (Windows)",
         }
         request = urllib.request.Request(url, data=body, headers=headers, method="POST")
+        if os.name == "nt" and shutil.which("curl.exe"):
+            try:
+                return _CurlResponse(url, headers, body, timeout, stream)
+            except Exception as exc:
+                raise ApiError(f"无法启动 HTTPS 请求：{exc}") from exc
         try:
-            context = ssl.create_default_context()
+            if os.environ.get("TWILIGHT_INSECURE_SSL", "").strip() == "1":
+                context = ssl._create_unverified_context()
+            else:
+                ca_bundle = os.environ.get("TWILIGHT_CA_BUNDLE", "").strip()
+                if ca_bundle and os.path.isfile(ca_bundle):
+                    context = ssl.create_default_context(cafile=ca_bundle)
+                else:
+                    try:
+                        import certifi
+                        context = ssl.create_default_context(cafile=certifi.where())
+                    except Exception:
+                        context = ssl.create_default_context()
             return urllib.request.urlopen(request, timeout=timeout, context=context)
         except urllib.error.HTTPError as exc:
             raise _error_from_http(exc) from exc
@@ -590,6 +660,35 @@ def _truncate(text: str, limit: int = 240) -> str:
     return text
 
 
+# A "model error" means the requested model itself was rejected (unknown /
+# unsupported / unavailable name), which is worth retrying with a fallback
+# model.  A context-length or token-limit error also mentions the model but is
+# *not* fixable by switching models, so it must never trigger fallback.
+_MODEL_IDENTIFICATION_ERROR_RE = re.compile(
+    r"(?i)("
+    r"(?:model|模型).{0,24}"
+    r"(?:not[ _-]?(?:found|exist\w*|available|supported)|"
+    r"does not exist|doesn't exist|invalid|unknown|unsupported|unavailable|"
+    r"不存在|无效|不支持|未找到)"
+    r"|no such model|invalid model|unknown model|unsupported model|unavailable model|"
+    r"model[ _-]?not[ _-]?found|"
+    r"(?:无效|不存在|不支持)(?:的)?模型"
+    r")"
+)
+_CONTEXT_LENGTH_ERROR_RE = re.compile(
+    r"(?i)(context length|context_length|maximum context|max tokens|"
+    r"token limit|too many tokens|上下文|tokens)"
+)
+
+
+def _is_model_identification_error(detail: str) -> bool:
+    """True only when the detail identifies a bad model name, not a length error."""
+    text = detail or ""
+    if _CONTEXT_LENGTH_ERROR_RE.search(text):
+        return False
+    return bool(_MODEL_IDENTIFICATION_ERROR_RE.search(text))
+
+
 def _error_from_payload(error) -> ApiError:
     detail = ""
     if isinstance(error, dict):
@@ -600,8 +699,7 @@ def _error_from_payload(error) -> ApiError:
     else:
         detail = str(error or "")
     detail = _truncate(detail)
-    lowered = detail.lower()
-    model_error = "model" in lowered or "模型" in detail
+    model_error = _is_model_identification_error(detail)
     return ApiError(
         f"API 返回错误：{detail or '未知错误'}",
         detail=detail,
@@ -630,8 +728,7 @@ def _error_from_http(exc: urllib.error.HTTPError) -> ApiError:
     except json.JSONDecodeError:
         detail = _truncate(text)
     detail = _truncate(detail)
-    lowered = detail.lower()
-    model_error = status in (400, 404, 422) and ("model" in lowered or "模型" in detail)
+    model_error = status in (400, 404, 422) and _is_model_identification_error(detail)
     message = _HTTP_ERRORS.get(status)
     if message is None:
         if 500 <= status < 600:

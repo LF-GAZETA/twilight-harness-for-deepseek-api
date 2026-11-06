@@ -103,6 +103,9 @@ def build_character_module(character: Path) -> Path:
 
 
 def main() -> int:
+    sys.path.insert(0, str(APP))
+    import build_ai_common
+
     character = CONTENT / "twilight-character.md"
     if not character.is_file() or character.stat().st_size < 1000:
         print(f"ERROR: missing/too-small character card: {character}", file=sys.stderr)
@@ -111,8 +114,6 @@ def main() -> int:
     if missing_fonts:
         print(f"ERROR: missing bundled font files: {missing_fonts}", file=sys.stderr)
         return 2
-    write_feature_flags(True)
-    character_module = build_character_module(character)
     icon = BUILD / "app.ico"
     if not icon.is_file():
         run([sys.executable, str(BUILD / "make_icon.py")], cwd=ROOT)
@@ -150,6 +151,7 @@ def main() -> int:
     modules = [
         APP / "main.py",
         APP / "app.py",
+        APP / "debug_console.py",
         APP / "widgets.py",
         APP / "progress_window.py",
         APP / "api_client.py",
@@ -169,6 +171,15 @@ def main() -> int:
         APP / "local_tools.py",
         APP / "tag_table.py",
         APP / "feature_flags.py",
+        APP / "vhs_ntscqt.py",
+        APP / "vhs_video.py",
+        APP / "vhs_audio.py",
+        APP / "ai_compat.py",
+        APP / "ai_resources.py",
+        APP / "ai_prompt.py",
+        APP / "ai_sd15.py",
+        APP / "ai_audio.py",
+        APP / "build_ai_common.py",
     ]
     if not TAG_TABLE.is_file():
         print(f"ERROR: missing Derpibooru tag table {TAG_TABLE}", file=sys.stderr)
@@ -177,6 +188,8 @@ def main() -> int:
         if not module.is_file():
             print(f"ERROR: missing source module {module}", file=sys.stderr)
             return 2
+    write_feature_flags(True)
+    character_module = build_character_module(character)
     subprocess.run(
         [sys.executable, "-m", "py_compile", *[str(m) for m in modules]],
         cwd=ROOT,
@@ -184,7 +197,7 @@ def main() -> int:
     )
 
     # Rebuild from a clean PyInstaller workspace.
-    for stale in (DIST, BUILD / "debug-build" / "work", BUILD / "debug-build" / "twilight-harness-file-debug.spec"):
+    for stale in (DIST, BUILD / "debug-build" / "work", BUILD / "twilight-harness-file-debug.spec"):
         try:
             if stale.is_dir():
                 shutil.rmtree(stale)
@@ -192,6 +205,10 @@ def main() -> int:
                 stale.unlink()
         except OSError:
             pass
+
+    ai_extra, ai_notes = build_ai_common.collect_ai_build_inputs()
+    for note in ai_notes:
+        print(f"AI: {note}")
 
     cmd = [
         sys.executable,
@@ -257,6 +274,15 @@ def main() -> int:
         "winrt.windows.media",
         "--collect-submodules",
         "winrt",
+        "--hidden-import",
+        "pedalboard",
+        "--hidden-import",
+        "pedalboard_native",
+        "--collect-submodules",
+        "pedalboard",
+        "--hidden-import",
+        "debug_console",
+        *ai_extra,
         "--runtime-tmpdir",
         ".",
         "--add-data",
@@ -306,6 +332,22 @@ The GUI and a visible debug console open together; no .cmd launcher is needed.
 Debug logs are printed to the console and written to temp/twilight-harness.log.
 Closing the GUI closes the debug console as well.
 Downloads is used for user-requested local tool output and is never deleted.
+
+The console also accepts local commands (type /help):
+  /derpi PING 104.26.15.212:443     TCP + DNS + TLS/HTTP HEAD diagnostics
+  /derpi PING <IP>:443 SNI=host     verify HTTPS when the server needs SNI
+  /derpi PING host:443 IP=addr      bypass poisoned DNS with a fixed address
+  /derpi PING https://derpicdn.net/ same, via URL (port 443)
+  /derpi HEAD <URL>                 HTTP headers only
+  /derpi GET <URL> [out]            download a URL
+  /derpi <tags>                     Derpibooru search + download
+  /upscale <image>                  Real-ESRGAN
+  /vhs <video> [240p|288p|360p]      VHS effect
+  /status /config /paths /log       environment diagnostics
+  /ai /sd /voice /embed              local AI commands
+  /quit                             close the app
+
+Network timeout can be changed with TWILIGHT_PING_TIMEOUT=15.
 """,
         encoding="utf-8",
     )

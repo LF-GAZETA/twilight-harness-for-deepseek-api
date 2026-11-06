@@ -1,8 +1,12 @@
 """Filesystem layout for Twilight Harness.
 
 The delivered app is intentionally location-independent: everything except the
-executable lives in sibling folders (`fonts/` and `temp/`).  The PyInstaller
-runtime itself also extracts into `temp/` through --runtime-tmpdir.
+executable lives in sibling folders (`fonts/` and `temp/`).  Run data (the
+API-key file, character card and logs) is kept in a sibling `temp/` folder and
+falls back to a writable per-user location when that folder cannot be created.
+
+The PyInstaller onefile runtime extracts into the current working directory, not
+into `temp/`, because the build scripts pass ``--runtime-tmpdir "."``.
 """
 
 from __future__ import annotations
@@ -10,6 +14,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -29,18 +34,53 @@ def fonts_dir() -> Path:
     return base / "fonts"
 
 
+def _ensure_writable_dir(candidate: Path) -> bool:
+    """Create *candidate* when needed and prove a file can be written there."""
+    try:
+        candidate.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+    probe = candidate / f".twilight-write-probe-{os.getpid()}"
+    try:
+        probe.write_bytes(b"")
+        return True
+    except OSError:
+        return False
+    finally:
+        try:
+            probe.unlink()
+        except OSError:
+            pass
+
+
 def data_home() -> Path:
-    """Per-run temp data folder (temp/api-key.ini, character card, logs)."""
+    """Writable per-run data folder (temp/api-key.ini, character card, logs).
+
+    Preference order: the ``TWILIGHT_HOME`` override, ``temp/`` beside the
+    executable, ``<persistent_dir>/data``, then the system temp folder.  A
+    read-only delivery folder therefore falls back to a writable location
+    instead of failing later with a misleading "permission denied".
+    """
     override = os.environ.get("TWILIGHT_HOME")
     if override:
         home = Path(override).expanduser().resolve()
-    else:
-        home = resource_base() / "temp"
-    try:
-        home.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
-    return home
+        try:
+            home.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        return home
+
+    exe_temp = resource_base() / "temp"
+    if _ensure_writable_dir(exe_temp):
+        return exe_temp
+
+    per_user = persistent_dir() / "data"
+    if _ensure_writable_dir(per_user):
+        return per_user
+
+    system_temp = Path(tempfile.gettempdir()) / "TwilightHarness-data"
+    _ensure_writable_dir(system_temp)
+    return system_temp
 
 
 def persistent_dir() -> Path:

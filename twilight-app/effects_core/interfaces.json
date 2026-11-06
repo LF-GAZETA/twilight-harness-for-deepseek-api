@@ -1,0 +1,35 @@
+{
+  "version": "0027",
+  "engine": "beold-core",
+  "variables": {
+    "q": {
+      "description": "VHS degradation strength",
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.7,
+      "mode": "vhs"
+    },
+    "crush": {
+      "description": "SQUEEZE bitrate-crush strength",
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.7,
+      "mode": "squeeze"
+    },
+    "age": {
+      "description": "PATINA image aging strength",
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.7,
+      "mode": "patina"
+    }
+  },
+  "modes": {
+    "vhs": {"inputs": ["video", "gif", "apng"], "outputs": [".mp4", ".gif", ".png", ".apng"]},
+    "squeeze": {"inputs": ["video"], "outputs": [".mkv"]},
+    "patina": {"inputs": ["image", "gif", "apng"], "outputs": [".jpg", ".gif", ".png", ".apng"]}
+  }
+}
