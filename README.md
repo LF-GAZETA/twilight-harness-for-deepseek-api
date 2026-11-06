@@ -62,6 +62,7 @@ Benchmark  = 本地硬件/Qwen/ESRGAN/VHS 跑分；无 API、无聊天
 - Qwen-Image-2.1-Turbo Universal INT4；
 - 真正的逐像素 image-to-image：`/edit`、`qwen_edit`；
 - SD1.5 INT8 文生图；
+- Standard 版的 SD1.5 编辑使用本地视觉描述 + SD1.5 引导重绘（当前 SD1.5 资源只有 VAE 解码器，不是像素保持型 img2img）；
 - Real-ESRGAN 图片 4×；
 - 参考图 + 文生图（Qwen 使用视觉描述引导）；
 - 生成图缩略图与导出目录。
@@ -141,8 +142,8 @@ release/rc-261106/twilight-harness-benchmark/
 
 ### 安装与运行
 
-1. 解压对应版本分卷；
-2. 进入目录，双击启动脚本或对应 EXE；
+1. 进入 `release/rc-261106/<版本>/`，或解压对应的分卷归档；
+2. 双击启动脚本或对应 EXE；
 3. 首次启动填写 API Key；
 4. TTS 首次使用会启动本机 GPT-SoVITS API，需要等待加载；
 5. 图像/视频模型依赖 NVIDIA CUDA；CPU/DirectML 为降级路径。
@@ -153,6 +154,7 @@ release/rc-261106/twilight-harness-benchmark/
 - 建议 16GB 以上内存；
 - 建议 NVIDIA 8GB 以上显存；
 - Plus 约 22GB；Standard 约 15GB；Chat 约 9GB；Benchmark 约 17GB；
+- `release/archives/` 用于放置分卷归档；目录本身也可直接运行；
 - 公式/函数图使用本机 Microsoft Edge 渲染。
 
 ### Benchmark
@@ -251,7 +253,7 @@ GitHub 使用自身页面字体渲染 Markdown；仓库内 Banner、功能海报
 - KaTeX block equations and function-plot 2D graphs;
 - Up to 32 attachments / 2GB total, 4-thread import;
 - Qwen-Image-2.1-Turbo INT4 text-to-image and true pixel image-to-image edit;
-- SD1.5 edition for lower-VRAM or SD-only deployments;
+- SD1.5 edition for lower-VRAM or SD-only deployments; SD1.5 editing is vision-guided regeneration because the bundled pack has a VAE decoder only;
 - VHS, crush, patina, RIFE, Real-ESRGAN, H.264/AAC/MP4;
 - GPT-SoVITS dual-language TTS; Latin languages simulated through the English checkpoint;
 - Native offline benchmark with variant-specific weights.
